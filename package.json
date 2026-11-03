@@ -1,0 +1,40 @@
+{
+  "name": "shopbook-server",
+  "version": "0.1.0",
+  "description": "Shop Book API: Express 5 and MySQL server for the offline-first bookkeeping app",
+  "private": true,
+  "main": "src/server.js",
+  "engines": {
+    "node": ">=26 <27"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --env-file=.env --watch src/server.js",
+    "test": "npm run check:api-docs && node --env-file-if-exists=.env.test node_modules/jest/bin/jest.js --runInBand",
+    "check:api-docs": "node scripts/check-api-docs.js",
+    "db:migrate": "node --env-file=.env node_modules/sequelize-cli/lib/sequelize db:migrate",
+    "db:migrate:status": "node --env-file=.env node_modules/sequelize-cli/lib/sequelize db:migrate:status",
+    "db:migrate:undo": "node --env-file=.env node_modules/sequelize-cli/lib/sequelize db:migrate:undo",
+    "db:migrate:test": "node --env-file=.env.test node_modules/sequelize-cli/lib/sequelize db:migrate",
+    "db:migrate:production": "node scripts/migrate-production.js db:migrate",
+    "db:migrate:status:production": "node scripts/migrate-production.js db:migrate:status"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "testMatch": [
+      "<rootDir>/tests/**/*.test.js"
+    ]
+  },
+  "dependencies": {
+    "cors": "^2.8.6",
+    "express": "^5.3.0",
+    "mysql2": "^3.24.6",
+    "sequelize": "^6.37.8",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "jest": "^30.5.2",
+    "sequelize-cli": "^6.6.5",
+    "supertest": "^7.3.1"
+  }
+}

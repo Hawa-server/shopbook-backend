@@ -1,0 +1,11 @@
+// Tells sequelize-cli where this project keeps its settings, migrations and
+// seeders (the server's code lives at the project root, not in a sub-folder).
+
+const path = require('node:path');
+
+module.exports = {
+  config: path.resolve(__dirname, 'src/config/sequelize-cli.js'),
+  'migrations-path': path.resolve(__dirname, 'migrations'),
+  'seeders-path': path.resolve(__dirname, 'seeders'),
+  'models-path': path.resolve(__dirname, 'src/models'),
+};

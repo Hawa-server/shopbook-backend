@@ -1,0 +1,126 @@
+{
+  "info": {
+    "name": "Shop Book API",
+    "description": "Manual tests for the Shop Book server, following docs/api.md. Set the collection variable baseUrl (default http://localhost:3000). Run the server with `npm run dev` first.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:3000" },
+    { "key": "clientUrl", "value": "http://localhost:5173" }
+  ],
+  "item": [
+    {
+      "name": "BE1 Health and conventions",
+      "item": [
+        {
+          "name": "GET /api/health",
+          "request": { "method": "GET", "url": "{{baseUrl}}/api/health" },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200 with status ok', () => { pm.response.to.have.status(200); pm.expect(pm.response.json().status).to.eql('ok'); pm.expect(pm.response.json().database).to.eql('ok'); });",
+                  "pm.test('has X-Request-Id', () => pm.response.to.have.header('X-Request-Id'));",
+                  "pm.test('security headers', () => { pm.response.to.have.header('X-Content-Type-Options', 'nosniff'); pm.response.to.have.header('X-Frame-Options', 'DENY'); pm.response.to.have.header('Referrer-Policy', 'no-referrer'); pm.response.to.have.header('Cache-Control', 'no-store'); pm.response.to.not.have.header('X-Powered-By'); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unknown route → 404 NOT_FOUND",
+          "request": { "method": "GET", "url": "{{baseUrl}}/api/does-not-exist" },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('404 in the error format', () => { pm.response.to.have.status(404); pm.expect(pm.response.json()).to.eql({ error: { code: 'NOT_FOUND', message: 'Not found' } }); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST without X-Requested-With → 403 CSRF_HEADER_MISSING",
+          "request": { "method": "POST", "url": "{{baseUrl}}/api/does-not-exist" },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('403 CSRF_HEADER_MISSING', () => { pm.response.to.have.status(403); pm.expect(pm.response.json().error.code).to.eql('CSRF_HEADER_MISSING'); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST from a foreign Origin → 403 ORIGIN_NOT_ALLOWED",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/does-not-exist",
+            "header": [
+              { "key": "X-Requested-With", "value": "XMLHttpRequest" },
+              { "key": "Origin", "value": "https://evil.example" }
+            ]
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('403 ORIGIN_NOT_ALLOWED', () => { pm.response.to.have.status(403); pm.expect(pm.response.json().error.code).to.eql('ORIGIN_NOT_ALLOWED'); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST with header and the app's Origin → passes the check (404 here)",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/does-not-exist",
+            "header": [
+              { "key": "X-Requested-With", "value": "XMLHttpRequest" },
+              { "key": "Origin", "value": "{{clientUrl}}" }
+            ]
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('reaches not found (CSRF check passed)', () => { pm.response.to.have.status(404); pm.expect(pm.response.json().error.code).to.eql('NOT_FOUND'); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Invalid JSON → 400 INVALID_JSON",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/does-not-exist",
+            "header": [
+              { "key": "X-Requested-With", "value": "XMLHttpRequest" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\"broken\": " }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('400 INVALID_JSON', () => { pm.response.to.have.status(400); pm.expect(pm.response.json().error.code).to.eql('INVALID_JSON'); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

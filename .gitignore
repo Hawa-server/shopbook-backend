@@ -1,0 +1,19 @@
+# Files Git must never keep for the Shop Book server.
+
+# Installed libraries (npm ci recreates them)
+node_modules/
+
+# Secrets: every .env file except the example
+.env
+.env.*
+!.env.example
+
+# Certificates and keys (the database CA certificate lives outside the project anyway)
+*.pem
+*.crt
+*.key
+
+# Test and tool output
+coverage/
+*.log
+.DS_Store
