@@ -135,6 +135,23 @@ describe('email adapter', () => {
     }
   });
 
+  test("production: Brevo's reason code is logged, but never its message", async () => {
+    const { lines, logger } = collectingLogger();
+    const fetchImpl = async () => ({
+      ok: false, status: 403, json: async () => ({ code: 'unauthorized', message: 'Unauthorised IP for ama@example.test' }),
+    });
+    const sender = createEmailSender({ config: productionConfig(), logger, fetchImpl });
+    await sender.sendEmail({ to: 'ama@example.test', template: 'reset_password', data, userId: 'u1' });
+    expect(JSON.parse(lines[0])).toMatchObject({ event: 'email_failed', httpStatus: 403, providerCode: 'unauthorized' });
+    expect(lines.join('')).not.toMatch(/ama@example\.test|Unauthorised IP/);
+
+    // A code that isn't a plain word (it could hide something) is left out.
+    const odd = collectingLogger();
+    const oddSender = createEmailSender({ config: productionConfig(), logger: odd.logger, fetchImpl: async () => ({ ok: false, status: 400, json: async () => ({ code: 'x@y.z' }) }) });
+    await oddSender.sendEmail({ to: 'ama@example.test', template: 'reset_password', data, userId: 'u1' });
+    expect(JSON.parse(odd.lines[0]).providerCode).toBeUndefined();
+  });
+
   test('every template has English and Twi, and masking hides the address', () => {
     for (const template of ['confirm_email', 'change_email', 'reset_password']) {
       for (const language of ['en', 'tw']) expect(renderEmail(template, language, data).text).toContain(data.link);

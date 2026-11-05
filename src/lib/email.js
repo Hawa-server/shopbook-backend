@@ -14,6 +14,19 @@ const { describeError } = require('./logger');
 
 const BREVO_URL = 'https://api.brevo.com/v3/smtp/email';
 
+// Brevo's short reason code from a refusal (e.g. "unauthorized",
+// "permission_denied"), so the log says WHY an email wasn't sent. Only the
+// `code` field is kept, and only if it's a plain lowercase word: Brevo's
+// `message` can mention addresses, so it's never logged.
+async function providerCode(response) {
+  try {
+    const body = await response.json();
+    return typeof body?.code === 'string' && /^[a-z_]{1,40}$/.test(body.code) ? body.code : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 // Makes the sender. `fetchImpl` and `print` can be replaced in tests.
 function createEmailSender({ config, logger, fetchImpl = fetch, print = (text) => process.stdout.write(text) }) {
   const sentInTests = [];
@@ -46,7 +59,7 @@ function createEmailSender({ config, logger, fetchImpl = fetch, print = (text) =
         signal: AbortSignal.timeout(10000),
       });
       if (!response.ok) {
-        logger.error('email_failed', { template, userId, httpStatus: response.status });
+        logger.error('email_failed', { template, userId, httpStatus: response.status, providerCode: await providerCode(response) });
         return false;
       }
       logger.info('email_sent', { template, userId });
