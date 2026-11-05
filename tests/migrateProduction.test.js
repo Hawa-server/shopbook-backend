@@ -28,6 +28,11 @@ const productionVars = {
   DB_SSL_CA_PATH: caFile,
   CLIENT_URL: 'https://shopbook.example.test',
   TRUST_PROXY: '1',
+  JWT_SECRET: 'j'.repeat(40),
+  APP_URL: 'https://shopbook.example.test',
+  EMAIL_API_KEY: 'fake-brevo-key',
+  EMAIL_FROM_ADDRESS: 'shop@example.test',
+  EMAIL_FROM_NAME: 'Shop Book',
 };
 
 // A stand-in for spawnSync that records what it was asked to run.

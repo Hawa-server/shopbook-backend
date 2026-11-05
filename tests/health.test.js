@@ -43,6 +43,7 @@ describe('GET /api/health', () => {
       DB_USER: 'unreachable',
       DB_PASSWORD: '',
       CLIENT_URL: 'https://app.shopbook.test',
+      JWT_SECRET: 'unreachable-test-secret',
     };
     const db = require('../src/db');
     expect(() => require('../src/config/env').getConfig()).not.toThrow();

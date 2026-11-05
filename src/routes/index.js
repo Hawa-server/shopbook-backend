@@ -4,6 +4,7 @@
 // (or describe one that doesn't exist). Add every new route here.
 
 const { healthHandler } = require('./health');
+const { authRoutes } = require('./auth');
 
 // Each entry: the HTTP method, the full path (with /api), and `build`, which
 // receives the app's dependencies and returns the route's middleware and
@@ -11,6 +12,7 @@ const { healthHandler } = require('./health');
 // docs/api.md uses the same text in its `### METHOD /path` headings.
 const routes = [
   { method: 'GET', path: '/api/health', build: (deps) => [healthHandler(deps)] },
+  ...authRoutes,
 ];
 
 module.exports = { routes };

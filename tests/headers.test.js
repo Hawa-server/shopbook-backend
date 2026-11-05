@@ -41,7 +41,12 @@ describe('response headers', () => {
     // Production requires a CA certificate path that exists; any file will do here.
     const ca = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'shopbook-')), 'ca.pem');
     fs.writeFileSync(ca, 'test');
-    const { app } = testApp({ config: testConfig({ NODE_ENV: 'production', DB_SSL_CA_PATH: ca, TRUST_PROXY: '1' }) });
+    const { app } = testApp({
+      config: testConfig({
+        NODE_ENV: 'production', DB_SSL_CA_PATH: ca, TRUST_PROXY: '1', JWT_SECRET: 'h'.repeat(32),
+        APP_URL: 'https://app.shopbook.test', EMAIL_API_KEY: 'key', EMAIL_FROM_ADDRESS: 'shop@shopbook.test', EMAIL_FROM_NAME: 'Shop Book',
+      }),
+    });
     const res = await request(app).get('/api/health');
     expect(res.headers['strict-transport-security']).toBe('max-age=31536000; includeSubDomains');
   });

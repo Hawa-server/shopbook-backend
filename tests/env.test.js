@@ -14,6 +14,20 @@ const valid = {
   DB_USER: 'tester',
   DB_PASSWORD: 'not-a-real-password-123',
   CLIENT_URL: 'https://app.shopbook.test/',
+  JWT_SECRET: 'short-is-fine-outside-production',
+};
+
+// Everything production needs on top of `valid`.
+const production = {
+  ...valid,
+  NODE_ENV: 'production',
+  TRUST_PROXY: '3',
+  DB_SSL_CA_PATH: __filename,
+  JWT_SECRET: 'p'.repeat(32),
+  APP_URL: 'https://app.shopbook.test',
+  EMAIL_API_KEY: 'key',
+  EMAIL_FROM_ADDRESS: 'shop@shopbook.test',
+  EMAIL_FROM_NAME: 'Shop Book',
 };
 
 describe('parseEnv', () => {
@@ -59,7 +73,8 @@ describe('parseEnv', () => {
 
   test('the CA certificate can be given as text, including with literal \\n', () => {
     const pem = '-----BEGIN CERTIFICATE-----\\nMIIBfake\\n-----END CERTIFICATE-----';
-    const config = parseEnv({ ...valid, NODE_ENV: 'production', TRUST_PROXY: '1', DB_SSL_CA: pem });
+    const { DB_SSL_CA_PATH, ...withoutPath } = production;
+    const config = parseEnv({ ...withoutPath, DB_SSL_CA: pem });
     expect(config.DB_SSL_CA).toBe('-----BEGIN CERTIFICATE-----\nMIIBfake\n-----END CERTIFICATE-----');
   });
 
@@ -67,6 +82,18 @@ describe('parseEnv', () => {
     expect(() => parseEnv({ ...valid, DB_SSL_CA: 'hello' })).toThrow(/DB_SSL_CA is not a PEM certificate/);
     const pem = '-----BEGIN CERTIFICATE-----\nx\n-----END CERTIFICATE-----';
     expect(() => parseEnv({ ...valid, DB_SSL_CA: pem, DB_SSL_CA_PATH: __filename })).toThrow(/use only one/);
+  });
+
+  test('production refuses a JWT_SECRET shorter than 32 characters, and needs the email settings', () => {
+    expect(parseEnv(production).JWT_SECRET).toHaveLength(32);
+    expect(() => parseEnv({ ...production, JWT_SECRET: 'p'.repeat(31) })).toThrow(/JWT_SECRET must be at least 32 characters in production/);
+    for (const name of ['APP_URL', 'EMAIL_API_KEY', 'EMAIL_FROM_ADDRESS', 'EMAIL_FROM_NAME']) {
+      expect(() => parseEnv({ ...production, [name]: undefined })).toThrow(new RegExp(`${name} is required in production`));
+    }
+  });
+
+  test('APP_URL defaults to CLIENT_URL outside production', () => {
+    expect(parseEnv(valid).APP_URL).toBe('https://app.shopbook.test');
   });
 
   test('a CA certificate path that does not exist is refused', () => {
@@ -86,6 +113,7 @@ describe('starting the server', () => {
     expect(result.stderr).toMatch(/Invalid environment variables/);
     expect(result.stderr).toMatch(/DB_HOST is missing/);
     expect(result.stderr).toMatch(/CLIENT_URL is missing/);
+    expect(result.stderr).toMatch(/JWT_SECRET is missing/);
     expect(result.stderr).toMatch(/See \.env\.example/);
   });
 });

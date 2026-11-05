@@ -1,12 +1,38 @@
 {
   "info": {
     "name": "Shop Book API",
-    "description": "Manual tests for the Shop Book server, following docs/api.md. Set the collection variable baseUrl (default http://localhost:3000). Run the server with `npm run dev` first.",
+    "description": "Manual tests for the Shop Book server, following docs/api.md. Set the collection variable baseUrl (default http://localhost:3000). Run the server with `npm run dev` first. Postman keeps the session cookie between requests, like a phone's browser. In development, every email (with its link) is printed in the server's terminal: copy the token from the link into the `token` variable for the confirm and reset requests.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
-    { "key": "baseUrl", "value": "http://localhost:3000" },
-    { "key": "clientUrl", "value": "http://localhost:5173" }
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3000"
+    },
+    {
+      "key": "clientUrl",
+      "value": "http://localhost:5173"
+    },
+    {
+      "key": "phone",
+      "value": "0244000123"
+    },
+    {
+      "key": "email",
+      "value": "ama.postman@example.test"
+    },
+    {
+      "key": "password",
+      "value": "kente-cloth-2026"
+    },
+    {
+      "key": "newPassword",
+      "value": "new-stall-password-9"
+    },
+    {
+      "key": "token",
+      "value": "paste-from-terminal"
+    }
   ],
   "item": [
     {
@@ -14,7 +40,10 @@
       "item": [
         {
           "name": "GET /api/health",
-          "request": { "method": "GET", "url": "{{baseUrl}}/api/health" },
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/health"
+          },
           "event": [
             {
               "listen": "test",
@@ -29,8 +58,11 @@
           ]
         },
         {
-          "name": "Unknown route → 404 NOT_FOUND",
-          "request": { "method": "GET", "url": "{{baseUrl}}/api/does-not-exist" },
+          "name": "Unknown route \u2192 404 NOT_FOUND",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/does-not-exist"
+          },
           "event": [
             {
               "listen": "test",
@@ -43,8 +75,11 @@
           ]
         },
         {
-          "name": "POST without X-Requested-With → 403 CSRF_HEADER_MISSING",
-          "request": { "method": "POST", "url": "{{baseUrl}}/api/does-not-exist" },
+          "name": "POST without X-Requested-With \u2192 403 CSRF_HEADER_MISSING",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/does-not-exist"
+          },
           "event": [
             {
               "listen": "test",
@@ -57,13 +92,19 @@
           ]
         },
         {
-          "name": "POST from a foreign Origin → 403 ORIGIN_NOT_ALLOWED",
+          "name": "POST from a foreign Origin \u2192 403 ORIGIN_NOT_ALLOWED",
           "request": {
             "method": "POST",
             "url": "{{baseUrl}}/api/does-not-exist",
             "header": [
-              { "key": "X-Requested-With", "value": "XMLHttpRequest" },
-              { "key": "Origin", "value": "https://evil.example" }
+              {
+                "key": "X-Requested-With",
+                "value": "XMLHttpRequest"
+              },
+              {
+                "key": "Origin",
+                "value": "https://evil.example"
+              }
             ]
           },
           "event": [
@@ -78,13 +119,19 @@
           ]
         },
         {
-          "name": "POST with header and the app's Origin → passes the check (404 here)",
+          "name": "POST with header and the app's Origin \u2192 passes the check (404 here)",
           "request": {
             "method": "POST",
             "url": "{{baseUrl}}/api/does-not-exist",
             "header": [
-              { "key": "X-Requested-With", "value": "XMLHttpRequest" },
-              { "key": "Origin", "value": "{{clientUrl}}" }
+              {
+                "key": "X-Requested-With",
+                "value": "XMLHttpRequest"
+              },
+              {
+                "key": "Origin",
+                "value": "{{clientUrl}}"
+              }
             ]
           },
           "event": [
@@ -99,15 +146,24 @@
           ]
         },
         {
-          "name": "Invalid JSON → 400 INVALID_JSON",
+          "name": "Invalid JSON \u2192 400 INVALID_JSON",
           "request": {
             "method": "POST",
             "url": "{{baseUrl}}/api/does-not-exist",
             "header": [
-              { "key": "X-Requested-With", "value": "XMLHttpRequest" },
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "X-Requested-With",
+                "value": "XMLHttpRequest"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
-            "body": { "mode": "raw", "raw": "{\"broken\": " }
+            "body": {
+              "mode": "raw",
+              "raw": "{\"broken\": "
+            }
           },
           "event": [
             {
@@ -115,6 +171,475 @@
               "script": {
                 "exec": [
                   "pm.test('400 INVALID_JSON', () => { pm.response.to.have.status(400); pm.expect(pm.response.json().error.code).to.eql('INVALID_JSON'); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "BE2 Accounts (run in order)",
+      "item": [
+        {
+          "name": "GET /api/legal/current",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/legal/current",
+            "header": [
+              {
+                "key": "X-Requested-With",
+                "value": "XMLHttpRequest"
+              }
+            ]
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('version 1', () => pm.expect(pm.response.json().version).to.eql('1'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /api/auth/signup",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/auth/signup",
+            "header": [
+              {
+                "key": "X-Requested-With",
+                "value": "XMLHttpRequest"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Ama Mensah\",\n  \"phone\": \"{{phone}}\",\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\",\n  \"businessName\": \"Ama Fabrics\",\n  \"language\": \"en\",\n  \"acceptTerms\": true,\n  \"termsVersion\": \"1\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 201', () => pm.response.to.have.status(201));",
+                  "pm.test('owner of one business', () => pm.expect(pm.response.json().businesses[0].role).to.eql('owner'));",
+                  "pm.test('cookie set', () => pm.expect(pm.cookies.has('sb_session')).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /api/auth/signup (same phone again) \u2192 409 PHONE_TAKEN",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/auth/signup",
+            "header": [
+              {
+                "key": "X-Requested-With",
+                "value": "XMLHttpRequest"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Someone\",\n  \"phone\": \"{{phone}}\",\n  \"email\": \"other.postman@example.test\",\n  \"password\": \"{{password}}\",\n  \"businessName\": \"Other\",\n  \"language\": \"en\",\n  \"acceptTerms\": true,\n  \"termsVersion\": \"1\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 409', () => pm.response.to.have.status(409));",
+                  "pm.test('code PHONE_TAKEN', () => pm.expect(pm.response.json().error.code).to.eql('PHONE_TAKEN'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /api/auth/me",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/auth/me",
+            "header": [
+              {
+                "key": "X-Requested-With",
+                "value": "XMLHttpRequest"
+              }
+            ]
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "PATCH /api/auth/me (language)",
+          "request": {
+            "method": "PATCH",
+            "url": "{{baseUrl}}/api/auth/me",
+            "header": [
+              {
+                "key": "X-Requested-With",
+                "value": "XMLHttpRequest"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"language\": \"tw\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('language tw', () => pm.expect(pm.response.json().user.language).to.eql('tw'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /api/auth/confirm-email/send",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/auth/confirm-email/send",
+            "header": [
+              {
+                "key": "X-Requested-With",
+                "value": "XMLHttpRequest"
+              }
+            ]
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /api/auth/confirm-email (token from the terminal)",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/auth/confirm-email",
+            "header": [
+              {
+                "key": "X-Requested-With",
+                "value": "XMLHttpRequest"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"token\": \"{{token}}\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /api/auth/signout",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/auth/signout",
+            "header": [
+              {
+                "key": "X-Requested-With",
+                "value": "XMLHttpRequest"
+              }
+            ]
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 204', () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /api/auth/me (signed out) \u2192 401 NOT_SIGNED_IN",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/auth/me",
+            "header": [
+              {
+                "key": "X-Requested-With",
+                "value": "XMLHttpRequest"
+              }
+            ]
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 401', () => pm.response.to.have.status(401));",
+                  "pm.test('code NOT_SIGNED_IN', () => pm.expect(pm.response.json().error.code).to.eql('NOT_SIGNED_IN'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /api/auth/signin (wrong password) \u2192 401 WRONG_LOGIN",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/auth/signin",
+            "header": [
+              {
+                "key": "X-Requested-With",
+                "value": "XMLHttpRequest"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"login\": \"{{phone}}\",\n  \"password\": \"not-the-password\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 401', () => pm.response.to.have.status(401));",
+                  "pm.test('code WRONG_LOGIN', () => pm.expect(pm.response.json().error.code).to.eql('WRONG_LOGIN'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /api/auth/signin (by phone)",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/auth/signin",
+            "header": [
+              {
+                "key": "X-Requested-With",
+                "value": "XMLHttpRequest"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"login\": \"{{phone}}\",\n  \"password\": \"{{password}}\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /api/auth/change-password",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/auth/change-password",
+            "header": [
+              {
+                "key": "X-Requested-With",
+                "value": "XMLHttpRequest"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"currentPassword\": \"{{password}}\",\n  \"newPassword\": \"{{newPassword}}\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "PATCH /api/auth/me/phone",
+          "request": {
+            "method": "PATCH",
+            "url": "{{baseUrl}}/api/auth/me/phone",
+            "header": [
+              {
+                "key": "X-Requested-With",
+                "value": "XMLHttpRequest"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"currentPassword\": \"{{newPassword}}\",\n  \"newPhone\": \"020 777 0123\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "PATCH /api/auth/me/email",
+          "request": {
+            "method": "PATCH",
+            "url": "{{baseUrl}}/api/auth/me/email",
+            "header": [
+              {
+                "key": "X-Requested-With",
+                "value": "XMLHttpRequest"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"currentPassword\": \"{{newPassword}}\",\n  \"newEmail\": \"ama.new.postman@example.test\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('pending', () => pm.expect(pm.response.json().user.pendingEmail).to.eql('ama.new.postman@example.test'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /api/auth/forgot-password (always the same answer)",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/auth/forgot-password",
+            "header": [
+              {
+                "key": "X-Requested-With",
+                "value": "XMLHttpRequest"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"login\": \"{{email}}\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /api/auth/reset-password (token from the terminal)",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/auth/reset-password",
+            "header": [
+              {
+                "key": "X-Requested-With",
+                "value": "XMLHttpRequest"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"token\": \"{{token}}\",\n  \"newPassword\": \"fresh-start-2026\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
                 ]
               }
             }
