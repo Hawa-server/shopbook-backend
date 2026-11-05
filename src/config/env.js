@@ -15,7 +15,7 @@ const DEV_CLIENT_ORIGIN = 'http://localhost:5173';
 const EMPTY_ALLOWED = new Set(['DB_PASSWORD']);
 
 // The shape of every variable the server reads. Later tasks add their own
-// (JWT_SECRET and the email settings in BE2, SENTRY_DSN in BE17).
+// (SENTRY_DSN in BE17).
 const shape = {
   NODE_ENV: z.enum(['development', 'test', 'production']),
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
@@ -42,6 +42,19 @@ const shape = {
 
   TRUST_PROXY: z.coerce.number().int().min(0).max(10).optional(),
 
+  // Signs the session cookie. Anyone who knows it could make their own
+  // sign-ins, so production refuses one shorter than 32 characters.
+  JWT_SECRET: z.string(),
+
+  // The app's address used in email links (/confirm-email, /reset-password).
+  // Normally the same as CLIENT_URL; defaults to it outside production.
+  APP_URL: z.url().transform((value) => value.replace(/\/+$/, '')).optional(),
+
+  // Brevo's HTTPS API (production only; development prints emails, tests keep them).
+  EMAIL_API_KEY: z.string().optional(),
+  EMAIL_FROM_ADDRESS: z.email().optional(),
+  EMAIL_FROM_NAME: z.string().optional(),
+
   LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error', 'silent']).optional(),
   LOG_PROXY_CHAIN: z.enum(['true', 'false']).default('false').transform((value) => value === 'true'),
 };
@@ -63,6 +76,14 @@ const schema = z
     }
     if (env.DB_SSL_CA_PATH && !fs.existsSync(env.DB_SSL_CA_PATH)) {
       ctx.addIssue({ code: 'custom', path: ['DB_SSL_CA_PATH'], message: 'points to a file that does not exist' });
+    }
+    if (env.NODE_ENV === 'production') {
+      if (env.JWT_SECRET.length < 32) {
+        ctx.addIssue({ code: 'custom', path: ['JWT_SECRET'], message: 'must be at least 32 characters in production' });
+      }
+      for (const name of ['APP_URL', 'EMAIL_API_KEY', 'EMAIL_FROM_ADDRESS', 'EMAIL_FROM_NAME']) {
+        if (!env[name]) ctx.addIssue({ code: 'custom', path: [name], message: 'is required in production' });
+      }
     }
     // In production the proxy hop count must be a conscious choice (checked in
     // BE1 Part B), otherwise rate limits could lump every phone together.
@@ -103,6 +124,7 @@ function parseEnv(source) {
   return Object.freeze({
     ...env,
     TRUST_PROXY: env.TRUST_PROXY ?? 0,
+    APP_URL: env.APP_URL ?? env.CLIENT_URL,
     LOG_LEVEL: env.LOG_LEVEL ?? (env.NODE_ENV === 'test' ? 'silent' : 'info'),
     isProduction: env.NODE_ENV === 'production',
     isDevelopment: env.NODE_ENV === 'development',

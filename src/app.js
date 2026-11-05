@@ -4,7 +4,12 @@
 // build the app with their own settings and send it requests directly.
 
 const express = require('express');
+const cookieParser = require('cookie-parser');
 const { routes: defaultRoutes } = require('./routes');
+const { createAuthLimiters } = require('./routes/limiters');
+const { createEmailSender } = require('./lib/email');
+const { createBackgroundRunner } = require('./lib/background');
+const db = require('./db');
 const { requestId } = require('./middleware/requestId');
 const { requestLog } = require('./middleware/requestLog');
 const { securityHeaders } = require('./middleware/securityHeaders');
@@ -21,7 +26,21 @@ function keepRawBody(req, res, buf) {
 
 // Makes the app. `config` comes from parseEnv; `checkDatabase` and `logger`
 // are passed in so tests can replace them; `routes` defaults to the registry.
-function createApp({ config, checkDatabase, logger, routes = defaultRoutes }) {
+// The rest are the routes' shared helpers, each replaceable in tests: the
+// email sender, the rate limiters, background work, the database (models and
+// runTransaction) and the clock (`now`, milliseconds).
+function createApp({
+  config,
+  checkDatabase,
+  logger,
+  routes = defaultRoutes,
+  email = createEmailSender({ config, logger }),
+  limiters = createAuthLimiters(),
+  background = createBackgroundRunner({ logger }),
+  getModels = db.getModels,
+  runTransaction = db.runTransaction,
+  now = Date.now,
+}) {
   const app = express();
 
   // Don't announce "Express" to everyone (X-Powered-By).
@@ -42,9 +61,10 @@ function createApp({ config, checkDatabase, logger, routes = defaultRoutes }) {
   app.use(securityHeaders({ isProduction: config.isProduction }));
   app.use(corsMiddleware(config));
   app.use(express.json({ limit: '1mb', strict: true, verify: keepRawBody }));
+  app.use(cookieParser()); // reads the session cookie (src/lib/session.js)
   app.use(csrfProtection(config));
 
-  const deps = { config, checkDatabase, logger };
+  const deps = { config, checkDatabase, logger, email, limiters, background, getModels, runTransaction, now };
   for (const route of routes) {
     app[route.method.toLowerCase()](route.path, ...route.build(deps));
   }
@@ -52,6 +72,7 @@ function createApp({ config, checkDatabase, logger, routes = defaultRoutes }) {
   app.use(notFound);
   app.use(errorHandler({ logger }));
 
+  app.locals.deps = deps; // lets tests reach the email outbox, limiters and background work
   return app;
 }
 

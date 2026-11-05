@@ -13,7 +13,8 @@ describe('check:api-docs', () => {
   });
 
   test('a route with no heading, and a heading with no route, are both reported', () => {
-    const markdown = '### GET /api/health\n\n### POST /api/ghost\n';
+    // The real api.md plus one heading for a route that doesn't exist.
+    const markdown = `${fs.readFileSync(path.join(__dirname, '../docs/api.md'), 'utf8')}\n### POST /api/ghost\n`;
     const result = compareRoutes({ routes: [...routes, { method: 'GET', path: '/api/undocumented' }], markdown });
     expect(result.missingInDocs).toEqual(['GET /api/undocumented']);
     expect(result.missingInCode).toEqual(['POST /api/ghost']);

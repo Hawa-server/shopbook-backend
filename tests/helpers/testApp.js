@@ -18,6 +18,7 @@ function testConfig(overrides = {}) {
     DB_USER: 'not_used',
     DB_PASSWORD: '',
     CLIENT_URL,
+    JWT_SECRET: 'test-only-secret-not-used-anywhere-else',
     ...overrides,
   });
 }

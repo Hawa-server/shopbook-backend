@@ -8,6 +8,7 @@ The contract between the Shop Book server and the phone app. **The app uses only
 
 Newest first.
 
+- **BE2 (Accounts):** sign-up (business name, owner, first shop), sign-in by phone number or email, sign-out, the session cookie (idle 30 days, absolute 90 days), `GET`/`PATCH /api/auth/me`, change password, terms (`GET /api/legal/current`, accept-terms, `403 TERMS_REQUIRED`), confirm email and "Send the link again", forgot and reset password, change phone number and email. New error codes: `VALIDATION_FAILED`, `ORIGIN_REQUIRED`, `NOT_SIGNED_IN`, `WRONG_LOGIN`, `WRONG_PASSWORD`, `TERMS_REQUIRED`, `TERMS_VERSION_MISMATCH`, `PHONE_TAKEN`, `EMAIL_TAKEN`, `INVALID_TOKEN`, `NOTHING_TO_CONFIRM`, `EMAIL_NOT_SENT`, `TRY_AGAIN`. New enums: `language`, `role`, business `status`. Email links open the app at `/confirm-email?token=…` and `/reset-password?token=…`.
 - **BE1 (Project setup):** first version. Conventions (base path, `X-Requested-With`, `Origin`, `X-Request-Id`, money, quantities, times, IDs, body limit), the error format and the first error codes (`NOT_FOUND`, `CSRF_HEADER_MISSING`, `ORIGIN_NOT_ALLOWED`, `INVALID_JSON`, `INVALID_REQUEST`, `PAYLOAD_TOO_LARGE`, `RATE_LIMITED`, `INTERNAL_ERROR`), and `GET /api/health`. Not there yet: sign-in and the session cookie (BE2), `X-Business` (BE3), device signing headers and `X-Server-Time` (BE5).
 
 ---
@@ -26,7 +27,20 @@ Every endpoint is under **`/api`** on the app's own address. In production the a
 | `Content-Type` | Requests with a body | `application/json` |
 | `Origin` | Sent by the browser itself | Must be the app's own address. A request whose `Origin` is another website is refused with `403 ORIGIN_NOT_ALLOWED`. The app doesn't set this header. |
 
-`fetch` options for every request: `credentials: "include"` (the session cookie arrives in BE2; the app never reads it).
+`fetch` options for every request: `credentials: "include"`, so the session cookie is sent.
+
+### The session (sign-in)
+
+- Signing up or signing in sets a cookie named `sb_session`: **HTTP-only** (the app's JavaScript can't read it and never needs to), `SameSite=Lax`, `Path=/api`, `Secure` in production. The app never stores a token itself.
+- **Idle limit 30 days:** every successful signed-in request renews it for another 30 days (so daily syncing keeps people signed in).
+- **Absolute limit 90 days** after signing in: then the person must sign in again, however active they are.
+- Changing a password, phone number or email **ends every other sign-in** of that person at once; the phone that made the change gets a fresh cookie and stays signed in. A password **reset** (from an email link) ends **every** sign-in, including the phone that did it.
+- When a session ends, signed-in endpoints answer `401 NOT_SIGNED_IN`. **Keep every local record and the outbox**, keep working offline, and ask the person to sign in again when there's data.
+- Signing in on a phone doesn't sign out other phones (staff and owners may use more than one).
+
+### Account endpoints and `Origin`
+
+Sign-up, sign-in, forgot password and reset password must come from the app itself: the browser's `Origin` header must be present **and** be the app's address, otherwise `403 ORIGIN_REQUIRED` / `403 ORIGIN_NOT_ALLOWED`. The browser adds `Origin` to `POST` requests by itself; the app does nothing.
 
 ### Response headers
 
@@ -75,17 +89,30 @@ Decide what to do from **`code`** (stable), never from `message` (wording may ch
 | `INVALID_REQUEST` | 400 | The body couldn't be read (unsupported encoding or character set). | App bug; don't retry. |
 | `PAYLOAD_TOO_LARGE` | 413 | The body is over 1 MB. | Send smaller batches (sync pushes stay well under it at 200 operations). |
 | `RATE_LIMITED` | 429 | Too many requests of this kind. `Retry-After` says how many seconds to wait. | Wait and retry later; show a message only if it's a person's action (for example sign-in). |
+| `VALIDATION_FAILED` | 400 | One or more fields are missing or wrong. `fields` maps each field name to a message (e.g. `{ "phone": "Enter a Ghana mobile number, for example 024 123 4567." }`). | Show each message under its field (translate by field and context); let the person correct it. Don't retry unchanged. |
+| `ORIGIN_REQUIRED` | 403 | An account endpoint (sign-up, sign-in, forgot/reset password) was called without the browser's `Origin` header. | Shouldn't happen from the app (browsers send it). Report via Help. |
+| `NOT_SIGNED_IN` | 401 | No sign-in, or it has ended (30 days unused, 90 days old, password/phone/email changed elsewhere, or signed out). | **Keep all local data and the outbox.** Show the sign-in screen when online; selling continues offline meanwhile. |
+| `WRONG_LOGIN` | 401 | Sign-in failed. Always the same message, whatever was wrong: "Wrong phone number, email or password." | Show the message; let the person try again or use **Forgot password?**. |
+| `WRONG_PASSWORD` | 400 | The **current** password given for a change (password, phone, email) is wrong. `fields.currentPassword` is set. | Show it under the current-password field. |
+| `TERMS_REQUIRED` | 403 | The person hasn't accepted the current privacy notice and terms. | Show the terms screen (`GET /api/legal/current`), then `POST /api/auth/accept-terms`, then repeat the request. |
+| `TERMS_VERSION_MISMATCH` | 409 | The terms version sent isn't the current one (they changed since the app loaded them). | Load `GET /api/legal/current` again, show them, and ask again. |
+| `PHONE_TAKEN` | 409 | That phone number already belongs to an account. `fields.phone` (sign-up) or `fields.newPhone` (change phone). | Show under the field: "This phone number already has an account." Suggest signing in instead (sign-up). |
+| `EMAIL_TAKEN` | 409 | That email already belongs to an account. `fields.email` (sign-up) or `fields.newEmail` (change email); no `fields` when confirming a change link. | Show the message; ask for another email. |
+| `INVALID_TOKEN` | 400 | The link (confirm or reset) is unknown, already used, expired, or replaced by a newer one. | Show "This link has expired or has already been used." with a way to ask for a new one. |
+| `NOTHING_TO_CONFIRM` | 409 | "Send the link again" when the email is already confirmed (or there's no email). | Refresh `GET /api/auth/me` and hide the notice. |
+| `EMAIL_NOT_SENT` | 502 | "Send the link again" couldn't send the email (in the error format, unlike a hosting 502). | Show "Couldn't send the email. Try again later." Nothing was lost. |
+| `TRY_AGAIN` | 503 | The database was busy (a lock conflict) even after retrying. In the error format, unlike a hosting 503. | **Temporary:** wait a moment and try again. Nothing was saved. |
 | `INTERNAL_ERROR` | 500 | Something unexpected went wrong on the server. `message` is "Something went wrong. Reference: \<request id\>". | **Temporary:** keep any unsent records and retry later. Keep the reference (also in `X-Request-Id`) for the Help message. |
 
 Other failures without the error format:
 
-- **Network failure, timeout, or a 502/503/504 from the hosting** (for example while the free server wakes up, which can take up to a minute): **temporary**. Keep everything and retry later with back-off; show "Connecting…", not an error.
+- **Network failure, timeout, or a 502/503/504 without the error format** (from the hosting) (for example while the free server wakes up, which can take up to a minute): **temporary**. Keep everything and retry later with back-off; show "Connecting…", not an error.
 
 ---
 
 ## Endpoints
 
-Grouped by area as they arrive (accounts, devices, team, sync, reports, export, business, practice). Each endpoint heading is `### METHOD /path`.
+Grouped by area as they arrive (accounts, devices, team, sync, reports, export, business, practice). Each endpoint heading is `### METHOD /path`. "Signed" means signed with the device key (from BE5); no endpoint so far is signed.
 
 ### GET /api/health
 
@@ -118,6 +145,240 @@ Is the server running, and can it reach its database? Call it in the background 
 
 ---
 
+## Accounts
+
+### The `me` object
+
+Sign-up, sign-in, `GET /api/auth/me` and most account changes answer with this object (some add one more field, noted below):
+
+```json
+{
+  "user": {
+    "id": "3f1c2a9e-6b7d-4c1e-9a2b-0d4e5f6a7b8c",
+    "name": "Ama Mensah",
+    "phone": "+233241234567",
+    "email": "ama@example.com",
+    "emailConfirmed": false,
+    "pendingEmail": null,
+    "language": "en",
+    "mustChangePassword": false
+  },
+  "terms": { "currentVersion": "1", "acceptedVersion": "1", "accepted": true },
+  "businesses": [
+    { "id": "8a0b1c2d-3e4f-4a5b-8c6d-7e8f9a0b1c2d", "name": "Ama Fabrics", "role": "owner", "isPractice": false, "status": "active" }
+  ]
+}
+```
+
+| Field | Type | Meaning |
+|---|---|---|
+| `user.id` | UUID | The person's ID. |
+| `user.name` | string | 1–60 characters. |
+| `user.phone` | string | Always `+233XXXXXXXXX`. Show it as `024 123 4567`. |
+| `user.email` | string or null | Lower case. The owner always has one; staff may not. |
+| `user.emailConfirmed` | boolean | `false` → Settings shows "Email not confirmed. **Send the link again**" (`POST /api/auth/confirm-email/send`). Never blocks the app. |
+| `user.pendingEmail` | string or null | A new email waiting for its link to be tapped; the old `email` stays in use until then. Show "Waiting for you to confirm [pendingEmail]". |
+| `user.language` | `en` or `tw` | The person's app language. |
+| `user.mustChangePassword` | boolean | `true` → show "Choose your own password" (`POST /api/auth/change-password`) before anything else. (Staff with a temporary password, from BE3.) |
+| `terms.currentVersion` | string | The version in force. |
+| `terms.acceptedVersion` | string or null | The version this person accepted. |
+| `terms.accepted` | boolean | `false` → show the terms and `POST /api/auth/accept-terms` (other endpoints answer `403 TERMS_REQUIRED` meanwhile). |
+| `businesses` | array | The person's **active** memberships: real businesses first, then practice shops. Empty if they've been removed everywhere. |
+| `businesses[].id` | UUID | The business ID (from BE3, sent as `X-Business`). |
+| `businesses[].name` | string | The business name (from its settings). |
+| `businesses[].role` | `owner`, `manager` or `associate` | For **display**; the server checks the role itself on every request. |
+| `businesses[].isPractice` | boolean | `true` for a practice shop (BE16). |
+| `businesses[].status` | `active` or `closing` | `closing`: the owner asked to close it (BE15). |
+
+### GET /api/legal/current
+
+The current privacy notice and terms, in English and Twi, as Markdown. Show them at sign-up (links next to the tick box) and whenever `terms.accepted` is `false`.
+
+- **Who:** anyone. **Signed:** no. **Request:** nothing.
+- **Response 200:**
+
+  ```json
+  {
+    "version": "1",
+    "documents": {
+      "en": { "privacy": "# Shop Book privacy notice\n…", "terms": "# Shop Book terms of use\n…" },
+      "tw": { "privacy": "…", "terms": "…" }
+    }
+  }
+  ```
+
+  Send `version` back when accepting (`termsVersion` at sign-up, `version` in accept-terms). The texts are first drafts and the Twi texts are not translated yet; their content may change without the version changing until they're final.
+- **Errors:** none. **Rate limit:** none. **Available since:** BE2.
+
+### POST /api/auth/signup
+
+Creates a business with its owner and first shop, signs the owner in (sets the session cookie) and emails a confirm-email link. Everything is created together or not at all.
+
+- **Who:** anyone. **Signed:** no. **Needs `Origin`:** yes (see Conventions).
+- **Request:**
+
+  ```json
+  {
+    "name": "Ama Mensah",
+    "phone": "024 123 4567",
+    "email": "ama@example.com",
+    "password": "kente-cloth-2026",
+    "businessName": "Ama Fabrics",
+    "language": "en",
+    "acceptTerms": true,
+    "termsVersion": "1"
+  }
+  ```
+
+| Field | Type | Rules |
+|---|---|---|
+| `name` | string, required | The owner's name, 1–60 characters after trimming. |
+| `phone` | string, required | A Ghana **mobile** number in any usual form (`0241234567`, `024 123 4567`, `+233 24 123 4567`, `233241234567`); stored as `+233241234567`. |
+| `email` | string, required | Trimmed and stored in lower case; at most 254 characters. |
+| `password` | string, required | 8–128 characters, not a very common password. |
+| `businessName` | string, required | 1–60 characters after trimming. Typed only here; later changed in Business settings (`settings.update`, BE5). The first shop gets the same name. |
+| `language` | `en` or `tw`, required | The owner's language and the business's default language for customers. |
+| `acceptTerms` | `true`, required | The tick "I accept the privacy notice and terms". |
+| `termsVersion` | string, required | `version` from `GET /api/legal/current`. |
+
+- **Response 201:** the `me` object plus `emailSent`, and the session cookie.
+
+  ```json
+  { "user": { "…": "…" }, "terms": { "…": "…" }, "businesses": [ { "…": "…" } ], "emailSent": true }
+  ```
+
+  `emailSent: false` means the account **was** created but the confirm email couldn't be sent: show "We couldn't send the confirmation email. **Send the link again**" (Settings). Don't repeat the sign-up.
+- **Errors:** `400 VALIDATION_FAILED` (with `fields`: `name`, `phone`, `email`, `password`, `businessName`, `language`, `acceptTerms`), `409 PHONE_TAKEN`, `409 EMAIL_TAKEN`, `409 TERMS_VERSION_MISMATCH`, `403 ORIGIN_REQUIRED`, `429 RATE_LIMITED`.
+- **Password messages** (in `fields.password`): "Use at least 8 characters.", "Use at most 128 characters.", "This password is too common. Choose another one."
+- **Rate limit:** 5 per hour per IP address.
+- **Available since:** BE2.
+
+### POST /api/auth/signin
+
+Signs in with a phone number **or** an email, plus the password. Sets the session cookie.
+
+- **Who:** anyone. **Signed:** no. **Needs `Origin`:** yes.
+- **Request:** `{ "login": "024 123 4567", "password": "kente-cloth-2026" }`. `login` is treated as an email if it contains `@`, otherwise as a phone number (any usual form).
+- **Response 200:** the `me` object, and the session cookie. Then check, in this order: `user.mustChangePassword`, `terms.accepted`, `businesses` (empty → "You're not part of any business any more").
+- **Errors:** `401 WRONG_LOGIN` for **any** wrong login or password (never says which), `400 VALIDATION_FAILED` (empty fields), `403 ORIGIN_REQUIRED`, `429 RATE_LIMITED`.
+- **Rate limit:** 10 attempts per 15 minutes per login (the same number typed differently counts together) and 10 per 15 minutes per IP address. Every attempt counts.
+- **Available since:** BE2.
+
+### POST /api/auth/signout
+
+Removes the session cookie on **this** phone. Other phones stay signed in.
+
+- **Who:** anyone (works even if already signed out). **Signed:** no.
+- **Request:** no body (send `X-Requested-With` as always).
+- **Response 204:** no body. Warn before signing out if there are unsent records (app plan).
+- **Errors:** none of its own. **Rate limit:** none. **Available since:** BE2.
+
+### GET /api/auth/me
+
+Who's signed in, their businesses and roles, and whether they've accepted the current terms. Works even when the terms aren't accepted, so the app knows to ask.
+
+- **Who:** signed in. **Signed:** no.
+- **Response 200:** the `me` object (renews the session cookie).
+- **Errors:** `401 NOT_SIGNED_IN`. **Rate limit:** none. **Available since:** BE2.
+
+### PATCH /api/auth/me
+
+Changes the person's own app language. (The language used for customers' messages is the customer's own; the business's default is a business setting.)
+
+- **Who:** signed in (terms not needed). **Signed:** no.
+- **Request:** `{ "language": "tw" }`: `en` or `tw`. Other fields are ignored.
+- **Response 200:** the `me` object.
+- **Errors:** `400 VALIDATION_FAILED` (`fields.language`), `401 NOT_SIGNED_IN`. **Rate limit:** none. **Available since:** BE2.
+
+### POST /api/auth/change-password
+
+Changes the password, and is how staff replace a temporary password at their first sign-in. Ends the person's **other** sign-ins; this phone stays signed in (new cookie).
+
+- **Who:** signed in (terms not needed). **Signed:** no.
+- **Request:** `{ "currentPassword": "temporary-or-old", "newPassword": "my-own-password-1" }`.
+- **Rules for `newPassword`:** as at sign-up, and different from the current one.
+- **Response 200:** the `me` object (`mustChangePassword` is now `false`).
+- **Errors:** `400 WRONG_PASSWORD` (`fields.currentPassword`), `400 VALIDATION_FAILED` (`fields.newPassword`), `401 NOT_SIGNED_IN`, `429 RATE_LIMITED`.
+- **Rate limit:** 10 current-password checks per 15 minutes per person (shared with changing phone and email).
+- **Available since:** BE2.
+
+### POST /api/auth/accept-terms
+
+Records that the person accepted the current privacy notice and terms (and when).
+
+- **Who:** signed in. **Signed:** no.
+- **Request:** `{ "version": "1" }`: `version` from `GET /api/legal/current`.
+- **Response 200:** the `me` object (`terms.accepted: true`).
+- **Errors:** `409 TERMS_VERSION_MISMATCH`, `400 VALIDATION_FAILED`, `401 NOT_SIGNED_IN`. **Rate limit:** none. **Available since:** BE2.
+
+### POST /api/auth/confirm-email/send
+
+"Send the link again": emails a new confirm link (to the pending new email if there is one, otherwise to the unconfirmed email). Older links of the same kind stop working.
+
+- **Who:** signed in, terms accepted. **Signed:** no.
+- **Request:** no body.
+- **Response 200:** `{ "emailSent": true }`. Show "We've sent a new link. Check your inbox and spam."
+- **Errors:** `502 EMAIL_NOT_SENT`, `409 NOTHING_TO_CONFIRM`, `401 NOT_SIGNED_IN`, `403 TERMS_REQUIRED`, `429 RATE_LIMITED`.
+- **Rate limit:** 3 per hour per person (shared with forgot password for the same account) and 10 per hour per IP address.
+- **Available since:** BE2.
+
+### POST /api/auth/confirm-email
+
+Confirms an email from the link in the email. The link opens the app at **`/confirm-email?token=…`**: take the token from the address, **remove it from the address straight away** (`history.replaceState`), never store or log it, and send it here. Works without being signed in (the link may be opened on another device).
+
+- **Who:** anyone with the link. **Signed:** no.
+- **Request:** `{ "token": "…" }`.
+- **Response 200:** `{ "emailConfirmed": true }`. Show "Email confirmed". If the person is signed in on this phone, refresh `GET /api/auth/me`.
+- What it confirms: a sign-up email (sets `emailConfirmed`), or a **change** of email (the pending email becomes `email`).
+- **Links work once and expire after 24 hours**; asking for a new link makes older ones stop working.
+- **Errors:** `400 INVALID_TOKEN`, `409 EMAIL_TAKEN` (someone else took the new address meanwhile; nothing changed), `400 VALIDATION_FAILED`.
+- **Rate limit:** none. **Available since:** BE2.
+
+### POST /api/auth/forgot-password
+
+Asks for a password-reset link. **Always** answers the same, whether or not the account exists or has a confirmed email, so nobody can find out who has an account.
+
+- **Who:** anyone. **Signed:** no. **Needs `Origin`:** yes.
+- **Request:** `{ "login": "ama@example.com" }`: a phone number or an email.
+- **Response 200:** `{ "message": "If that account has a confirmed email, we've sent a link. Check your inbox and spam." }`. Show it (translated), plus: "No email? Ask your shop owner to reset your password."
+- What happens: only if the account exists **and** its email is confirmed, a reset link goes to that email. Nothing is sent to an unconfirmed email.
+- **Errors:** `400 VALIDATION_FAILED` (empty `login`), `403 ORIGIN_REQUIRED`, `429 RATE_LIMITED`.
+- **Rate limit:** 3 per hour per login (as typed, normalised) and 10 per hour per IP address.
+- **Available since:** BE2.
+
+### POST /api/auth/reset-password
+
+Sets a new password from a reset link. The link opens the app at **`/reset-password?token=…`**: take the token, remove it from the address straight away, never store or log it. Ask for the new password twice (the app checks they match), then send it here.
+
+- **Who:** anyone with the link. **Signed:** no. **Needs `Origin`:** yes.
+- **Request:** `{ "token": "…", "newPassword": "fresh-start-2026" }`. Rules as at sign-up.
+- **Response 200:** `{ "passwordChanged": true }`, and the session cookie is removed. Show "Password changed. Sign in again." **Every** sign-in of this person has ended, on every phone.
+- **The link works once and expires after 30 minutes.** A password refused by the rules doesn't use up the link.
+- **Errors:** `400 INVALID_TOKEN`, `400 VALIDATION_FAILED` (`fields.newPassword`), `403 ORIGIN_REQUIRED`.
+- **Rate limit:** none. **Available since:** BE2.
+
+### PATCH /api/auth/me/phone
+
+Changes the person's phone number (which they sign in with). Ends their **other** sign-ins; this phone stays signed in.
+
+- **Who:** signed in, terms accepted. **Signed:** no.
+- **Request:** `{ "currentPassword": "…", "newPhone": "020 777 0001" }`.
+- **Response 200:** the `me` object with the new `user.phone`.
+- **Errors:** `400 WRONG_PASSWORD`, `400 VALIDATION_FAILED` (`fields.newPhone`: not a Ghana mobile number, or the same as now), `409 PHONE_TAKEN` (`fields.newPhone`), `401 NOT_SIGNED_IN`, `403 TERMS_REQUIRED`, `429 RATE_LIMITED`.
+- **Rate limit:** shared current-password limit (see change password). **Available since:** BE2.
+
+### PATCH /api/auth/me/email
+
+Changes (or, for staff, adds) the person's email. The new email is **pending** until its link is tapped; the old one keeps working until then, and a notice goes to the old address. Ends the person's **other** sign-ins; this phone stays signed in.
+
+- **Who:** signed in, terms accepted. **Signed:** no.
+- **Request:** `{ "currentPassword": "…", "newEmail": "new.address@example.com" }`.
+- **Response 200:** the `me` object (with `user.pendingEmail` set) plus `emailSent`. `emailSent: false`: the change is saved but the link couldn't be sent; offer **Send the link again**.
+- **Errors:** `400 WRONG_PASSWORD`, `400 VALIDATION_FAILED` (`fields.newEmail`: invalid, or the same as now), `409 EMAIL_TAKEN` (`fields.newEmail`), `401 NOT_SIGNED_IN`, `403 TERMS_REQUIRED`, `429 RATE_LIMITED`.
+- **Rate limit:** shared current-password limit (see change password). **Available since:** BE2.
+
+---
+
 ## Sync operations
 
 None yet (from BE5).
@@ -128,4 +389,8 @@ None yet (from BE5).
 
 ## Enums and flags
 
-None yet.
+| Enum | Values | Words to show |
+|---|---|---|
+| `language` | `en`, `tw` | English, Twi |
+| `role` | `owner`, `manager`, `associate` | Owner, Manager, Sales associate |
+| business `status` | `active`, `closing` | (nothing), Closing on [date] |

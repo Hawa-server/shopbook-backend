@@ -10,9 +10,9 @@ The API for Shop Book, an offline-first bookkeeping app for market traders: Expr
 1. Node 26: `nvm use` (reads `.nvmrc`).
 2. `npm install`
 3. In MySQL, create two databases, for example `shopbook_dev` and `shopbook_test`, and a user with full rights on both.
-4. Copy `.env.example` to `.env` (development database) and to `.env.test` (test database) and fill in the values. Both are Git-ignored. The tests create and delete their own data, so `.env.test` must point to a database used **only** for tests.
+4. Copy `.env.example` to `.env` (development database) and to `.env.test` (test database) and fill in the values, including a `JWT_SECRET` in each (the command to make one is in `.env.example`). Both are Git-ignored. The tests empty and refill their own tables, so `.env.test` must point to a database used **only** for tests (its name must end in `_test`).
 5. `npm run db:migrate` (and `npm run db:migrate:test`)
-6. `npm run dev`, then open <http://localhost:3000/api/health>
+6. `npm run dev`, then open <http://localhost:3000/api/health>. In development, account emails (with their links) are printed in this terminal instead of being sent.
 
 ## Commands
 
@@ -41,5 +41,5 @@ Both read **only** `.env.production` (never the terminal's own variables), refus
 ## Known limits
 
 - **Rate limits are kept in memory.** Correct while the API runs as **one** Render instance; a restart resets the counts. Before running more than one instance, move them to a MySQL table (`RateLimitHit`).
-- **Trust proxy:** the number of proxies in front of the server (`TRUST_PROXY`) is **not yet checked in production**; it's measured in BE1 Part B and written here with the date. Re-check it whenever the hosting changes (custom domain, paid plan, Cloudflare).
+- **Trust proxy:** `TRUST_PROXY=3` for the **direct** path (phone → Cloudflare → Render's router → a local proxy → server), measured on **3 Nov 2026** from a phone on mobile data: `X-Forwarded-For` arrives as `[caller, Cloudflare, Render 10.x]` with the socket at `::1`, and with 3 the server's `req.ip` is the caller's own address. A request sent with a forged `X-Forwarded-For: 1.2.3.4` arrived without it (Render's edge replaces the header), so `req.ip` was still the caller's real address. **To re-check after FE1** (the Vercel rewrite adds a hop), and whenever the hosting changes (custom domain, paid plan, another proxy).
 - **Free hosting:** Render's free plan sleeps after about 15 minutes (the first request can take up to a minute); Aiven's free MySQL is for testing only. See the server plan's "Free-tier hosting".

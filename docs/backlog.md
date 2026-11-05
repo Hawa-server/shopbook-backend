@@ -272,13 +272,14 @@ No codebase exists yet, so this epic sets up everything the user-facing epics de
 - **AC42: Errors reach the developer.** Given the server has an unexpected error, then the developer is alerted through error monitoring, without personal data.
 - **AC43: Support tools.** Given the developer needs to help a shop, then support tools, run from the developer's laptop and never from the app, can find a business by phone number or email, reset an owner's password (AC35), and count businesses and phones.
 - **AC44: Support is recorded.** Given the developer uses a support tool that changes something, then the action, the reason, who did it and when are recorded.
+- **AC45: Business details set once.** (Added 3 Nov 2026.) Given I'm the owner, when I open **More → Business settings**, then I can change the business name, the shop phone number and a short receipt note; every phone shows the new name after its next sync, and receipts, reminders and statements fill them in automatically. Staff can see the name but not change it.
 
 ## Step 2: Stories and points
 
 | Story | Title | Points | Priority | Covers |
 |---|---|---|---|---|
 | F1 | Project setup (backend, frontend, database, deployment pipeline) | 5 | Must have | Groundwork |
-| F2 | Sign up a business and sign in by phone number or email | 5 | Must have | AC1–AC6, AC37 |
+| F2 | Sign up a business and sign in by phone number or email | 5 | Must have | AC1–AC6, AC37, AC45 |
 | F3 | Team: add, change, and remove staff; first-sign-in password; owner resets a staff password | 5 | Must have | AC7–AC11, AC34 |
 | F4 | Business isolation and role checks on every request | 5 | Must have | AC12–AC14 |
 | F5a | Sync: server endpoints, change sequence, permanent vs editable records | 8 | Must have | AC17–AC19, AC22 |
