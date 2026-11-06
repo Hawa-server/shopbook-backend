@@ -5,6 +5,7 @@
 
 const { healthHandler } = require('./health');
 const { authRoutes } = require('./auth');
+const { teamRoutes } = require('./team');
 
 // Each entry: the HTTP method, the full path (with /api), and `build`, which
 // receives the app's dependencies and returns the route's middleware and
@@ -13,6 +14,7 @@ const { authRoutes } = require('./auth');
 const routes = [
   { method: 'GET', path: '/api/health', build: (deps) => [healthHandler(deps)] },
   ...authRoutes,
+  ...teamRoutes,
 ];
 
 module.exports = { routes };

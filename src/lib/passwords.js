@@ -5,6 +5,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { randomInt } = require('node:crypto');
 const argon2 = require('argon2');
 
 const MIN_LENGTH = 8;
@@ -51,4 +52,20 @@ async function getDummyHash() {
   return dummyHash;
 }
 
-module.exports = { passwordProblem, hashPassword, verifyPassword, getDummyHash, MIN_LENGTH, MAX_LENGTH };
+// Letters and digits that can't be mistaken for each other when read out or
+// typed on a phone (no 0/o, 1/l/i), all lower case so no shift key is needed.
+const TEMPORARY_ALPHABET = 'abcdefghjkmnpqrstuvwxyz23456789';
+
+// Makes a temporary password for a staff member, e.g. "k7m4p-q2xnr": 10
+// random characters (about 50 bits) in two groups, typed exactly as shown,
+// hyphen included. It's shown to the owner ONCE, stored only as its hash,
+// and the person must replace it at their first sign-in.
+function generateTemporaryPassword() {
+  let text = '';
+  for (let i = 0; i < 10; i += 1) text += TEMPORARY_ALPHABET[randomInt(TEMPORARY_ALPHABET.length)];
+  return `${text.slice(0, 5)}-${text.slice(5)}`;
+}
+
+module.exports = {
+  passwordProblem, hashPassword, verifyPassword, getDummyHash, generateTemporaryPassword, MIN_LENGTH, MAX_LENGTH,
+};

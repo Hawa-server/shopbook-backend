@@ -16,7 +16,7 @@ const db = require('../../src/db');
 const { TERMS_VERSION } = require('../../src/legal');
 
 // Every table, children first. Updated as migrations add tables.
-const TABLES = ['EmailToken', 'Membership', 'Location', 'BusinessSettings', 'Business', 'User'];
+const TABLES = ['ChangeLog', 'EmailToken', 'Membership', 'Location', 'BusinessSettings', 'Business', 'User'];
 
 // Empties every table in the test database.
 async function resetDatabase() {

@@ -8,6 +8,7 @@ The contract between the Shop Book server and the phone app. **The app uses only
 
 Newest first.
 
+- **BE3 (Team):** the **`X-Business` header** (required on every business endpoint), the team endpoints (`GET`/`POST /api/team`, `PATCH`/`DELETE /api/team/:membershipId`, `POST /api/team/:membershipId/reset-password`), **invitations** for people who already have an account (`me.invitations`, `POST /api/auth/invitations/:membershipId/accept` and `…/decline`). `PASSWORD_CHANGE_REQUIRED` now also applies to `confirm-email/send`, `me/phone`, `me/email`. New error codes: `BUSINESS_REQUIRED`, `ACCESS_REMOVED`, `BUSINESS_CLOSING`, `FORBIDDEN`, `PASSWORD_CHANGE_REQUIRED`, `ALREADY_MEMBER`, `ALREADY_INVITED`, `MEMBER_REMOVED`, `OWNER_CANNOT_CHANGE`, `RESET_NOT_ALLOWED`. New enum: member `status`.
 - **BE2 (Accounts):** sign-up (business name, owner, first shop), sign-in by phone number or email, sign-out, the session cookie (idle 30 days, absolute 90 days), `GET`/`PATCH /api/auth/me`, change password, terms (`GET /api/legal/current`, accept-terms, `403 TERMS_REQUIRED`), confirm email and "Send the link again", forgot and reset password, change phone number and email. New error codes: `VALIDATION_FAILED`, `ORIGIN_REQUIRED`, `NOT_SIGNED_IN`, `WRONG_LOGIN`, `WRONG_PASSWORD`, `TERMS_REQUIRED`, `TERMS_VERSION_MISMATCH`, `PHONE_TAKEN`, `EMAIL_TAKEN`, `INVALID_TOKEN`, `NOTHING_TO_CONFIRM`, `EMAIL_NOT_SENT`, `TRY_AGAIN`. New enums: `language`, `role`, business `status`. Email links open the app at `/confirm-email?token=…` and `/reset-password?token=…`.
 - **BE1 (Project setup):** first version. Conventions (base path, `X-Requested-With`, `Origin`, `X-Request-Id`, money, quantities, times, IDs, body limit), the error format and the first error codes (`NOT_FOUND`, `CSRF_HEADER_MISSING`, `ORIGIN_NOT_ALLOWED`, `INVALID_JSON`, `INVALID_REQUEST`, `PAYLOAD_TOO_LARGE`, `RATE_LIMITED`, `INTERNAL_ERROR`), and `GET /api/health`. Not there yet: sign-in and the session cookie (BE2), `X-Business` (BE3), device signing headers and `X-Server-Time` (BE5).
 
@@ -25,6 +26,7 @@ Every endpoint is under **`/api`** on the app's own address. In production the a
 |---|---|---|
 | `X-Requested-With` | **Every** `POST`, `PUT`, `PATCH` and `DELETE` | Exactly `XMLHttpRequest`. Without it the server answers `403 CSRF_HEADER_MISSING`. Send it on every request from the shared API helper; it's harmless on `GET`. |
 | `Content-Type` | Requests with a body | `application/json` |
+| `X-Business` | **Every business endpoint** (marked "Business" below) | The ID of the business this request is for, from `me.businesses[].id` (the open business on the phone). Missing → `400 BUSINESS_REQUIRED`; a business the person isn't in → `404 NOT_FOUND`. The server only uses it to choose among the person's own memberships and re-reads their role every time. |
 | `Origin` | Sent by the browser itself | Must be the app's own address. A request whose `Origin` is another website is refused with `403 ORIGIN_NOT_ALLOWED`. The app doesn't set this header. |
 
 `fetch` options for every request: `credentials: "include"`, so the session cookie is sent.
@@ -102,6 +104,16 @@ Decide what to do from **`code`** (stable), never from `message` (wording may ch
 | `NOTHING_TO_CONFIRM` | 409 | "Send the link again" when the email is already confirmed (or there's no email). | Refresh `GET /api/auth/me` and hide the notice. |
 | `EMAIL_NOT_SENT` | 502 | "Send the link again" couldn't send the email (in the error format, unlike a hosting 502). | Show "Couldn't send the email. Try again later." Nothing was lost. |
 | `TRY_AGAIN` | 503 | The database was busy (a lock conflict) even after retrying. In the error format, unlike a hosting 503. | **Temporary:** wait a moment and try again. Nothing was saved. |
+| `BUSINESS_REQUIRED` | 400 | A business endpoint was called without `X-Business`. | App bug: the shared API helper must always send the open business's ID. |
+| `ACCESS_REMOVED` | 403 | The person was removed from this business (or declined its invitation). | **Wipe that business's local database** (outbox included) and explain "You no longer have access to [business]". Other businesses on the phone are untouched; the person stays signed in. |
+| `BUSINESS_CLOSING` | 403 | The owner has asked to close this business (BE15). | Stop syncing it. Owner: show the "Closing on [date]" screen (BE15); staff: "This business has been closed by the owner." |
+| `FORBIDDEN` | 403 | This person's role in this business can't do that. | Show "Your role can't do this." Hide the action for that role. Don't retry. |
+| `PASSWORD_CHANGE_REQUIRED` | 403 | The person still has a temporary password (first sign-in, or the owner reset it). | Show "Choose your own password" (`POST /api/auth/change-password`), then repeat. |
+| `ALREADY_MEMBER` | 409 | The phone number belongs to someone already in this team. | Show "This person is already in your team." |
+| `ALREADY_INVITED` | 409 | That person already has a pending invitation to this business. | Show "This person has already been invited." |
+| `MEMBER_REMOVED` | 409 | The membership has ended (removed, declined or cancelled). | Refresh the team list. |
+| `OWNER_CANNOT_CHANGE` | 409 | The owner's own membership can't be changed, removed or reset from the team screen. | Don't offer these actions on the owner's row. |
+| `RESET_NOT_ALLOWED` | 403 | The owner tried to reset the password of someone who also belongs to another business. | Show "This person also uses Shop Book with another business. They can reset their password by email, or ask for help." |
 | `INTERNAL_ERROR` | 500 | Something unexpected went wrong on the server. `message` is "Something went wrong. Reference: \<request id\>". | **Temporary:** keep any unsent records and retry later. Keep the reference (also in `X-Request-Id`) for the Help message. |
 
 Other failures without the error format:
@@ -112,7 +124,9 @@ Other failures without the error format:
 
 ## Endpoints
 
-Grouped by area as they arrive (accounts, devices, team, sync, reports, export, business, practice). Each endpoint heading is `### METHOD /path`. "Signed" means signed with the device key (from BE5); no endpoint so far is signed.
+Grouped by area as they arrive (accounts, devices, team, sync, reports, export, business, practice). Each endpoint heading is `### METHOD /path`. "Signed" means signed with the device key: from BE5 **every business endpoint** (those needing `X-Business`) must be signed; until then none is.
+
+**Every business endpoint** can also answer, before anything else: `401 NOT_SIGNED_IN`, `400 BUSINESS_REQUIRED`, `404 NOT_FOUND` (not a member of that business), `403 ACCESS_REMOVED`, `403 BUSINESS_CLOSING`, `403 PASSWORD_CHANGE_REQUIRED`, `403 TERMS_REQUIRED`, and `403 FORBIDDEN` (role not allowed).
 
 ### GET /api/health
 
@@ -166,6 +180,9 @@ Sign-up, sign-in, `GET /api/auth/me` and most account changes answer with this o
   "terms": { "currentVersion": "1", "acceptedVersion": "1", "accepted": true },
   "businesses": [
     { "id": "8a0b1c2d-3e4f-4a5b-8c6d-7e8f9a0b1c2d", "name": "Ama Fabrics", "role": "owner", "isPractice": false, "status": "active" }
+  ],
+  "invitations": [
+    { "membershipId": "5d6e7f80-9a1b-4c2d-8e3f-4a5b6c7d8e9f", "businessName": "Kofi Shoes", "role": "manager", "invitedAt": "2026-11-05T10:00:00.000Z" }
   ]
 }
 ```
@@ -189,6 +206,11 @@ Sign-up, sign-in, `GET /api/auth/me` and most account changes answer with this o
 | `businesses[].role` | `owner`, `manager` or `associate` | For **display**; the server checks the role itself on every request. |
 | `businesses[].isPractice` | boolean | `true` for a practice shop (BE16). |
 | `businesses[].status` | `active` or `closing` | `closing`: the owner asked to close it (BE15). |
+| `invitations` | array | Businesses that invited this person (their phone number already had an account). Oldest first; empty when none. After sign-in, show each: "[businessName] invited you to join as [role]" with **Accept** / **Decline**. |
+| `invitations[].membershipId` | UUID | Use it in the accept/decline endpoints. |
+| `invitations[].businessName` | string | The inviting business's name. |
+| `invitations[].role` | `manager` or `associate` | The role offered. |
+| `invitations[].invitedAt` | time | When the invitation was sent. |
 
 ### GET /api/legal/current
 
@@ -315,10 +337,10 @@ Records that the person accepted the current privacy notice and terms (and when)
 
 "Send the link again": emails a new confirm link (to the pending new email if there is one, otherwise to the unconfirmed email). Older links of the same kind stop working.
 
-- **Who:** signed in, terms accepted. **Signed:** no.
+- **Who:** signed in, own password chosen, terms accepted. **Signed:** no.
 - **Request:** no body.
 - **Response 200:** `{ "emailSent": true }`. Show "We've sent a new link. Check your inbox and spam."
-- **Errors:** `502 EMAIL_NOT_SENT`, `409 NOTHING_TO_CONFIRM`, `401 NOT_SIGNED_IN`, `403 TERMS_REQUIRED`, `429 RATE_LIMITED`.
+- **Errors:** `502 EMAIL_NOT_SENT`, `409 NOTHING_TO_CONFIRM`, `401 NOT_SIGNED_IN`, `403 PASSWORD_CHANGE_REQUIRED`, `403 TERMS_REQUIRED`, `429 RATE_LIMITED`.
 - **Rate limit:** 3 per hour per person (shared with forgot password for the same account) and 10 per hour per IP address.
 - **Available since:** BE2.
 
@@ -364,7 +386,7 @@ Changes the person's phone number (which they sign in with). Ends their **other*
 - **Who:** signed in, terms accepted. **Signed:** no.
 - **Request:** `{ "currentPassword": "…", "newPhone": "020 777 0001" }`.
 - **Response 200:** the `me` object with the new `user.phone`.
-- **Errors:** `400 WRONG_PASSWORD`, `400 VALIDATION_FAILED` (`fields.newPhone`: not a Ghana mobile number, or the same as now), `409 PHONE_TAKEN` (`fields.newPhone`), `401 NOT_SIGNED_IN`, `403 TERMS_REQUIRED`, `429 RATE_LIMITED`.
+- **Errors:** `400 WRONG_PASSWORD`, `400 VALIDATION_FAILED` (`fields.newPhone`: not a Ghana mobile number, or the same as now), `409 PHONE_TAKEN` (`fields.newPhone`), `401 NOT_SIGNED_IN`, `403 PASSWORD_CHANGE_REQUIRED`, `403 TERMS_REQUIRED`, `429 RATE_LIMITED`.
 - **Rate limit:** shared current-password limit (see change password). **Available since:** BE2.
 
 ### PATCH /api/auth/me/email
@@ -374,8 +396,135 @@ Changes (or, for staff, adds) the person's email. The new email is **pending** u
 - **Who:** signed in, terms accepted. **Signed:** no.
 - **Request:** `{ "currentPassword": "…", "newEmail": "new.address@example.com" }`.
 - **Response 200:** the `me` object (with `user.pendingEmail` set) plus `emailSent`. `emailSent: false`: the change is saved but the link couldn't be sent; offer **Send the link again**.
-- **Errors:** `400 WRONG_PASSWORD`, `400 VALIDATION_FAILED` (`fields.newEmail`: invalid, or the same as now), `409 EMAIL_TAKEN` (`fields.newEmail`), `401 NOT_SIGNED_IN`, `403 TERMS_REQUIRED`, `429 RATE_LIMITED`.
+- **Errors:** `400 WRONG_PASSWORD`, `400 VALIDATION_FAILED` (`fields.newEmail`: invalid, or the same as now), `409 EMAIL_TAKEN` (`fields.newEmail`), `401 NOT_SIGNED_IN`, `403 PASSWORD_CHANGE_REQUIRED`, `403 TERMS_REQUIRED`, `429 RATE_LIMITED`.
 - **Rate limit:** shared current-password limit (see change password). **Available since:** BE2.
+
+### POST /api/auth/invitations/:membershipId/accept
+
+Accepts an invitation from `me.invitations`. The business then appears in `me.businesses` with that role, and the owner sees the person under their own name.
+
+- **Who:** signed in, the invited person only; own password chosen and terms accepted. **Signed:** no. **Business:** no (no `X-Business`).
+- **Request:** no body.
+- **Response 200:** the `me` object (the invitation gone, the business added).
+- **Errors:** `404 NOT_FOUND` (not this person's pending invitation: someone else's, already answered, or cancelled by the owner), `401 NOT_SIGNED_IN`, `403 PASSWORD_CHANGE_REQUIRED`, `403 TERMS_REQUIRED`.
+- **Rate limit:** none. **Available since:** BE3.
+
+### POST /api/auth/invitations/:membershipId/decline
+
+Declines an invitation. The owner sees "Declined" and may invite again later.
+
+- **Who / signed / business / request / errors:** as for accept.
+- **Response 200:** the `me` object (the invitation gone).
+- **Rate limit:** none. **Available since:** BE3.
+
+---
+
+## Team
+
+All team endpoints are **owner only** business endpoints: signed in, `X-Business` required, and the person must be that business's owner (others get `403 FORBIDDEN`). **Signed:** not yet; from BE5 they must be signed like every business endpoint.
+
+### The `member` object
+
+```json
+{
+  "membershipId": "1b2c3d4e-5f60-4a7b-8c9d-0e1f2a3b4c5d",
+  "name": "Kofi Boateng",
+  "phone": "+233241112233",
+  "email": "kofi@example.com",
+  "role": "associate",
+  "status": "active",
+  "mustChangePassword": true,
+  "invitedAt": null,
+  "joinedAt": "2026-11-05T09:00:00.000Z",
+  "removedAt": null
+}
+```
+
+| Field | Type | Meaning |
+|---|---|---|
+| `membershipId` | UUID | Use it in the other team endpoints. |
+| `name` | string | The person's name. For an **invitation** (status `invited` or `declined`, or an invitation cancelled before it was accepted) it's **the name the owner typed**, never the account's own name. |
+| `phone` | string | `+233…`; show as `024 123 4567`. |
+| `email` | string or null | The person's email. Always `null` for invitations (the account's own email is never shown). |
+| `role` | `owner`, `manager` or `associate` | |
+| `status` | `active`, `invited`, `declined`, `removed` | Words: (nothing), "Waiting for them to accept", "Declined", "Removed". |
+| `mustChangePassword` | boolean or null | `true`: they haven't signed in and chosen their own password yet ("Hasn't signed in yet"). `null` for invitations. |
+| `invitedAt` | time or null | When an invitation was sent. |
+| `joinedAt` | time | When the membership was created. |
+| `removedAt` | time or null | When it ended (removed, declined, cancelled). |
+
+### GET /api/team
+
+The business's team: the owner first, then active members, invitations, declined and removed.
+
+- **Request:** no body.
+- **Response 200:** `{ "members": [ member, … ] }`.
+- **Errors:** the business-endpoint errors above. **Rate limit:** none. **Available since:** BE3.
+
+### POST /api/team
+
+Adds a staff member. **Two cases, one answer shape:**
+
+- **The phone number has no Shop Book account:** a new account is made with a **temporary password**, shown in this answer **only**. Show it once with "Give this to them in person" (it's never shown again; if lost, use reset-password). They must replace it at their first sign-in, then accept the terms. If an email was given, it's saved unconfirmed and a confirm link is sent (`emailSent`).
+- **The phone number already has an account:** an **invitation** is created instead. `temporaryPassword` is `null`, `member.status` is `invited`, and the member shows only the name and number typed here. The person accepts or declines at their next sign-in (`me.invitations`). The email typed here is ignored.
+
+- **Request:**
+
+  ```json
+  { "name": "Kofi Boateng", "phone": "024 111 2233", "role": "associate", "email": "kofi@example.com" }
+  ```
+
+| Field | Type | Rules |
+|---|---|---|
+| `name` | string, required | 1–60 characters. |
+| `phone` | string, required | Ghana mobile number, any usual form. |
+| `role` | `manager` or `associate`, required | Never `owner`. |
+| `email` | string, optional | Empty or left out: no email (the person can add one later in Settings). |
+
+- **Response 201:**
+
+  ```json
+  { "member": { "…": "…", "status": "active" }, "temporaryPassword": "k7m4p-q2xnr", "emailSent": true }
+  ```
+
+  ```json
+  { "member": { "…": "…", "status": "invited", "email": null }, "temporaryPassword": null, "emailSent": null }
+  ```
+
+  `temporaryPassword` is 10 lower-case letters and digits in two groups (`k7m4p-q2xnr`), typed exactly as shown, hyphen included. The answer is never cached (`Cache-Control: no-store`); don't store it on the phone. `emailSent`: `null` when no email was sent, `false` if sending failed (the person can use **Send the link again** after signing in).
+- **Errors:** `400 VALIDATION_FAILED` (`fields`: `name`, `phone`, `role`, `email`), `409 ALREADY_MEMBER`, `409 ALREADY_INVITED`, `409 EMAIL_TAKEN` (a new person's email already belongs to an account), `429 RATE_LIMITED`, plus the business-endpoint errors.
+- **Someone removed or who declined earlier** is invited again (same `membershipId`, status `invited`).
+- **Rate limit:** 20 per hour per owner and 30 per hour per IP address.
+- **Available since:** BE3.
+
+### PATCH /api/team/:membershipId
+
+Changes a member's (or a pending invitation's) role between manager and sales associate. Recorded in the business's history.
+
+- **Request:** `{ "role": "manager" }`.
+- **Response 200:** `{ "member": member }`.
+- **Errors:** `400 VALIDATION_FAILED`, `404 NOT_FOUND` (not a membership of this business), `409 OWNER_CANNOT_CHANGE`, `409 MEMBER_REMOVED`, plus the business-endpoint errors.
+- **Takes effect** on the person's next request (the server re-reads the role every time); their phone learns it from `GET /api/auth/me`.
+- **Rate limit:** none. **Available since:** BE3.
+
+### POST /api/team/:membershipId/reset-password
+
+For a staff member who forgot their password and has no confirmed email (AC34): gives them a new **temporary password**, shown once in this answer. **All their sign-ins end at once**, and they must choose their own password at their next sign-in.
+
+- **Request:** no body.
+- **Response 200:** `{ "member": member, "temporaryPassword": "k7m4p-q2xnr" }` (never cached). Show it once with "Give this to them in person".
+- **Errors:** `403 RESET_NOT_ALLOWED` (the person also belongs to another business: they must use **Forgot password** by email, or ask for help), `404 NOT_FOUND`, `409 OWNER_CANNOT_CHANGE`, `409 MEMBER_REMOVED` (not an active member: removed, or an invitation), `429 RATE_LIMITED`, plus the business-endpoint errors.
+- **Rate limit:** 10 per hour per owner and 20 per hour per IP address.
+- **Available since:** BE3.
+
+### DELETE /api/team/:membershipId
+
+Removes a member from **this** business, or cancels a pending invitation. **Their access to this business ends at once:** their very next request for it answers `403 ACCESS_REMOVED`, and their phone then wipes this business's local data. They stay signed in for any other business they belong to. Nothing they recorded is changed or lost. **From BE5, removing someone also revokes their phones for this business.**
+
+- **Request:** no body.
+- **Response 200:** `{ "member": member }` (status `removed`).
+- **Errors:** `404 NOT_FOUND`, `409 OWNER_CANNOT_CHANGE`, `409 MEMBER_REMOVED` (already ended), plus the business-endpoint errors.
+- **Rate limit:** none. **Available since:** BE3.
 
 ---
 
@@ -394,3 +543,4 @@ None yet (from BE5).
 | `language` | `en`, `tw` | English, Twi |
 | `role` | `owner`, `manager`, `associate` | Owner, Manager, Sales associate |
 | business `status` | `active`, `closing` | (nothing), Closing on [date] |
+| member `status` | `active`, `invited`, `declined`, `removed` | (nothing), Waiting for them to accept, Declined, Removed |

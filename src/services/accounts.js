@@ -35,14 +35,25 @@ async function findUserByLogin(models, login) {
 }
 
 // The answer to GET /auth/me (and sign-up, sign-in…): who the person is,
-// whether they've accepted the current terms, and their ACTIVE memberships
-// with each business's name (from BusinessSettings) and their role there.
+// whether they've accepted the current terms, their ACTIVE memberships with
+// each business's name (from BusinessSettings) and their role there, and any
+// invitations waiting for them to accept or decline.
 // Roles here are for display; the server re-checks them on every request.
 async function buildMe(models, user) {
-  const memberships = await models.Membership.findAll({
-    where: { userId: user.id, isActive: true },
+  const rows = await models.Membership.findAll({
+    where: { userId: user.id, [Op.or]: [{ isActive: true }, { removedAt: null }] },
     include: [{ model: models.Business, as: 'business', include: [{ model: models.BusinessSettings, as: 'settings' }] }],
   });
+  const memberships = rows.filter((m) => m.isActive);
+  const invitations = rows
+    .filter((m) => !m.isActive && !m.removedAt)
+    .map((m) => ({
+      membershipId: m.id,
+      businessName: m.business.settings?.businessName ?? '',
+      role: m.role,
+      invitedAt: m.invitedAt,
+    }))
+    .sort((a, b) => new Date(a.invitedAt) - new Date(b.invitedAt));
   const businesses = memberships
     .map((m) => ({
       id: m.business.id,
@@ -70,6 +81,7 @@ async function buildMe(models, user) {
       accepted: user.termsVersion === TERMS_VERSION,
     },
     businesses,
+    invitations,
   };
 }
 

@@ -32,6 +32,18 @@
     {
       "key": "token",
       "value": "paste-from-terminal"
+    },
+    {
+      "key": "businessId",
+      "value": "paste-from-signup-or-me"
+    },
+    {
+      "key": "membershipId",
+      "value": "paste-from-team-list"
+    },
+    {
+      "key": "staffPhone",
+      "value": "0201234567"
     }
   ],
   "item": [
@@ -640,6 +652,189 @@
               "script": {
                 "exec": [
                   "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "BE3 Team (signed in as an owner; set businessId first)",
+      "item": [
+        {
+          "name": "GET /api/team (no X-Business) \u2192 400 BUSINESS_REQUIRED",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/team",
+            "header": [
+              {
+                "key": "X-Requested-With",
+                "value": "XMLHttpRequest"
+              }
+            ]
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 400', () => pm.response.to.have.status(400));",
+                  "pm.test('code BUSINESS_REQUIRED', () => pm.expect(pm.response.json().error.code).to.eql('BUSINESS_REQUIRED'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /api/team",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/team",
+            "header": [
+              {
+                "key": "X-Requested-With",
+                "value": "XMLHttpRequest"
+              },
+              {
+                "key": "X-Business",
+                "value": "{{businessId}}"
+              }
+            ]
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /api/team (new person \u2192 temporary password)",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/team",
+            "header": [
+              {
+                "key": "X-Requested-With",
+                "value": "XMLHttpRequest"
+              },
+              {
+                "key": "X-Business",
+                "value": "{{businessId}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Kofi Boateng\",\n  \"phone\": \"{{staffPhone}}\",\n  \"role\": \"associate\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 201', () => pm.response.to.have.status(201));",
+                  "pm.test('temporary password', () => pm.expect(pm.response.json().temporaryPassword).to.match(/^[a-z2-9]{5}-[a-z2-9]{5}$/));",
+                  "pm.collectionVariables.set('membershipId', pm.response.json().member.membershipId);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "PATCH /api/team/:membershipId (role)",
+          "request": {
+            "method": "PATCH",
+            "url": "{{baseUrl}}/api/team/{{membershipId}}",
+            "header": [
+              {
+                "key": "X-Requested-With",
+                "value": "XMLHttpRequest"
+              },
+              {
+                "key": "X-Business",
+                "value": "{{businessId}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"role\": \"manager\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /api/team/:membershipId/reset-password",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/team/{{membershipId}}/reset-password",
+            "header": [
+              {
+                "key": "X-Requested-With",
+                "value": "XMLHttpRequest"
+              },
+              {
+                "key": "X-Business",
+                "value": "{{businessId}}"
+              }
+            ]
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "DELETE /api/team/:membershipId",
+          "request": {
+            "method": "DELETE",
+            "url": "{{baseUrl}}/api/team/{{membershipId}}",
+            "header": [
+              {
+                "key": "X-Requested-With",
+                "value": "XMLHttpRequest"
+              },
+              {
+                "key": "X-Business",
+                "value": "{{businessId}}"
+              }
+            ]
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('removed', () => pm.expect(pm.response.json().member.status).to.eql('removed'));"
                 ]
               }
             }

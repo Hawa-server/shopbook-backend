@@ -19,6 +19,8 @@ const { passwordProblem, hashPassword, verifyPassword, getDummyHash } = require(
 const { setSessionCookie, clearSessionCookie, requireSession } = require('../lib/session');
 const { requireOrigin } = require('../middleware/csrf');
 const { requireTerms } = require('../middleware/requireTerms');
+const { requirePasswordChanged } = require('../middleware/requireAuth');
+const { recordChange } = require('../services/changeLog');
 const { TERMS_VERSION, currentLegal } = require('../legal');
 const { maskEmail } = require('../emails/templates');
 const accounts = require('../services/accounts');
@@ -408,6 +410,38 @@ function changeEmail(deps) {
   };
 }
 
+// POST /api/auth/invitations/:membershipId/accept or …/decline: the invited
+// person answers an invitation (only their OWN pending one; anything else is
+// 404). Accepting makes the membership active (the business then appears in
+// `businesses`), and from then on the owner sees the person's own name.
+// Declining ends it. Both are recorded in the business's ChangeLog.
+function answerInvitation(deps, answer) {
+  const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+  return async function handleAnswer(req, res) {
+    const membershipId = String(req.params.membershipId);
+    if (!UUID.test(membershipId)) throw new AppError(404, 'NOT_FOUND', 'Not found');
+    const models = deps.getModels();
+    const now = new Date(deps.now());
+
+    await deps.runTransaction(async (transaction) => {
+      const m = await models.Membership.findOne({
+        where: { id: membershipId, userId: req.user.id, isActive: false, removedAt: null },
+        transaction,
+      });
+      if (!m) throw new AppError(404, 'NOT_FOUND', 'Not found');
+      const changes = answer === 'accept'
+        ? { isActive: true, invitedName: null }
+        : { removedAt: now, declinedAt: now };
+      await m.update(changes, { transaction });
+      await recordChange(models, transaction, {
+        businessId: m.businessId, entity: 'membership', entityId: m.id, changedBy: req.user.id, changedAt: now,
+        before: { status: 'invited', role: m.role }, after: { status: answer === 'accept' ? 'active' : 'declined' },
+      });
+    });
+    res.json(await accounts.buildMe(models, req.user));
+  };
+}
+
 // GET /api/legal/current: the current privacy notice and terms, both languages.
 function legal() {
   return function handleLegal(req, res) {
@@ -418,7 +452,8 @@ function legal() {
 // ---- Route table ----------------------------------------------------------
 
 // The account routes for the registry. `session` = signed in; `terms` = has
-// accepted the current terms; `origin` = the Origin header must be the app's.
+// accepted the current terms; `origin` = the Origin header must be the app's;
+// requirePasswordChanged = no temporary password still waiting to be replaced.
 const authRoutes = [
   { method: 'GET', path: '/api/legal/current', build: () => [legal()] },
   { method: 'POST', path: '/api/auth/signup', build: (d) => [requireOrigin(d.config), d.limiters.signupByIp.middleware(), signup(d)] },
@@ -428,12 +463,14 @@ const authRoutes = [
   { method: 'PATCH', path: '/api/auth/me', build: (d) => [requireSession(d), updateMe(d)] },
   { method: 'POST', path: '/api/auth/change-password', build: (d) => [requireSession(d), changePassword(d)] },
   { method: 'POST', path: '/api/auth/accept-terms', build: (d) => [requireSession(d), acceptTerms(d)] },
-  { method: 'POST', path: '/api/auth/confirm-email/send', build: (d) => [requireSession(d), requireTerms, d.limiters.emailByIp.middleware(), resendConfirmation(d)] },
+  { method: 'POST', path: '/api/auth/confirm-email/send', build: (d) => [requireSession(d), requirePasswordChanged, requireTerms, d.limiters.emailByIp.middleware(), resendConfirmation(d)] },
   { method: 'POST', path: '/api/auth/confirm-email', build: (d) => [confirmEmail(d)] },
   { method: 'POST', path: '/api/auth/forgot-password', build: (d) => [requireOrigin(d.config), d.limiters.emailByIp.middleware(), forgotPassword(d)] },
   { method: 'POST', path: '/api/auth/reset-password', build: (d) => [requireOrigin(d.config), resetPassword(d)] },
-  { method: 'PATCH', path: '/api/auth/me/phone', build: (d) => [requireSession(d), requireTerms, changePhone(d)] },
-  { method: 'PATCH', path: '/api/auth/me/email', build: (d) => [requireSession(d), requireTerms, changeEmail(d)] },
+  { method: 'PATCH', path: '/api/auth/me/phone', build: (d) => [requireSession(d), requirePasswordChanged, requireTerms, changePhone(d)] },
+  { method: 'PATCH', path: '/api/auth/me/email', build: (d) => [requireSession(d), requirePasswordChanged, requireTerms, changeEmail(d)] },
+  { method: 'POST', path: '/api/auth/invitations/:membershipId/accept', build: (d) => [requireSession(d), requirePasswordChanged, requireTerms, answerInvitation(d, 'accept')] },
+  { method: 'POST', path: '/api/auth/invitations/:membershipId/decline', build: (d) => [requireSession(d), requirePasswordChanged, requireTerms, answerInvitation(d, 'decline')] },
 ];
 
 module.exports = { authRoutes };
