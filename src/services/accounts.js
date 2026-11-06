@@ -5,9 +5,11 @@
 const { randomUUID } = require('node:crypto');
 const { Op } = require('sequelize');
 const { AppError } = require('../lib/errors');
-const { normalizeGhanaPhone } = require('../lib/phone');
+const { normalizePhone } = require('../lib/phone');
+const locale = require('../locale');
 const { createToken, hashToken, sameHash } = require('../lib/tokens');
 const { TERMS_VERSION } = require('../legal');
+const { recordChange } = require('./changeLog');
 
 const HOUR_MS = 60 * 60 * 1000;
 const TOKEN_LIFETIME_MS = {
@@ -18,17 +20,18 @@ const TOKEN_LIFETIME_MS = {
 
 // What the person typed in the sign-in box, as the key it's looked up and
 // rate-limited by: an email in lower case if it contains "@", otherwise the
-// phone number in +233 form (or the text itself if it isn't a valid number).
-function loginKey(login) {
+// phone number in E.164 (a local number is read with `country`, the country
+// chosen on the screen), or the text itself if it isn't a valid number.
+function loginKey(login, country = locale.DEFAULT_COUNTRY) {
   const text = String(login).trim();
   if (text.includes('@')) return { kind: 'email', value: text.toLowerCase() };
-  const phone = normalizeGhanaPhone(text);
+  const phone = normalizePhone(text, country);
   return phone ? { kind: 'phone', value: phone } : { kind: 'unknown', value: text.toLowerCase() };
 }
 
 // Finds the user for a login (phone number or email), or null.
-async function findUserByLogin(models, login) {
-  const key = loginKey(login);
+async function findUserByLogin(models, login, country) {
+  const key = loginKey(login, country);
   if (key.kind === 'email') return models.User.findOne({ where: { email: key.value } });
   if (key.kind === 'phone') return models.User.findOne({ where: { phone: key.value } });
   return null;
@@ -61,6 +64,13 @@ async function buildMe(models, user) {
       role: m.role,
       isPractice: m.business.isPractice,
       status: m.business.status,
+      // Locale facts, so the phone formats money, dates and phone numbers itself.
+      country: m.business.country,
+      currency: locale.currencyForPhone(m.business.currency),
+      timezone: m.business.timezone,
+      defaultLanguage: m.business.settings?.defaultLanguage ?? locale.FALLBACK_LANGUAGE,
+      paymentMethods: m.business.settings?.paymentMethods ?? [],
+      localeLocked: Boolean(m.business.moneyRecordedAt),
     }))
     .sort((a, b) => Number(a.isPractice) - Number(b.isPractice) || a.name.localeCompare(b.name));
 
@@ -83,6 +93,63 @@ async function buildMe(models, user) {
     businesses,
     invitations,
   };
+}
+
+// Creates a new business at sign-up, inside `transaction`: the business,
+// its settings (with the business name), its first shop and the owner's
+// membership. Done here, not with scoped(), because the business doesn't
+// exist yet: this is where its businessId is born. Returns the business.
+// The country sets the business's currency, time zone and payment methods.
+async function createBusinessWithOwner(models, transaction, { owner, businessName, language, country }) {
+  const rules = locale.country(country);
+  const business = await models.Business.create({
+    id: randomUUID(), country: rules.code, currency: rules.currency, timezone: rules.timezones[0],
+  }, { transaction });
+  // The membership first: the settings' composite key (businessId, updatedBy)
+  // must point at an existing membership of this business.
+  await models.Membership.create({
+    id: randomUUID(), businessId: business.id, userId: owner.id, role: 'owner', createdBy: owner.id,
+  }, { transaction });
+  await models.BusinessSettings.create({
+    businessId: business.id, businessName, defaultLanguage: language, updatedBy: owner.id,
+    paymentMethods: [...rules.paymentMethods],
+  }, { transaction });
+  await models.Location.create({ id: randomUUID(), businessId: business.id, name: businessName, type: 'shop' }, { transaction });
+  return business;
+}
+
+// The invited person answers one of THEIR OWN pending invitations, inside
+// `transaction`. Looked up by the person's userId (not by a business: they
+// aren't a member yet, so there's no req.business). Accept makes it active
+// (and clears the owner-typed name, so the owner now sees the person's own
+// name); decline ends it. Recorded in that business's ChangeLog.
+// Returns false if there's no such pending invitation for this person.
+async function answerInvitation(models, transaction, { membershipId, userId, answer, now }) {
+  const m = await models.Membership.findOne({
+    where: { id: membershipId, userId, isActive: false, removedAt: null },
+    transaction,
+  });
+  if (!m) return false;
+  const changes = answer === 'accept' ? { isActive: true, invitedName: null } : { removedAt: now, declinedAt: now };
+  await m.update(changes, { transaction });
+  await recordChange(models, transaction, {
+    businessId: m.businessId, entity: 'membership', entityId: m.id, changedBy: userId, changedAt: now,
+    before: { status: 'invited', role: m.role }, after: { status: answer === 'accept' ? 'active' : 'declined' },
+  });
+  return true;
+}
+
+// True if the person has an ACTIVE membership in a real (not practice)
+// business other than `businessId`. A deliberate cross-business question,
+// asked before an owner resets someone's password: if they belong elsewhere,
+// the reset would let this owner sign in as them there, so it's refused.
+async function belongsToAnotherRealBusiness(models, transaction, { userId, businessId }) {
+  const count = await models.Membership.count({
+    where: { userId, isActive: true, businessId: { [Op.ne]: businessId } },
+    include: [{ model: models.Business, as: 'business', where: { isPractice: false } }],
+    transaction,
+  });
+  return count > 0;
 }
 
 // Creates a one-time token for an email link, inside `transaction`. Older
@@ -154,5 +221,6 @@ function emailLink(config, page, token) {
 
 module.exports = {
   loginKey, findUserByLogin, buildMe, issueEmailToken, claimEmailToken,
+  createBusinessWithOwner, answerInvitation, belongsToAnotherRealBusiness,
   invalidToken, takenError, emailLink, TOKEN_LIFETIME_MS,
 };

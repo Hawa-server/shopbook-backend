@@ -19,13 +19,13 @@ function defineModels(sequelize) {
   const User = sequelize.define('User', {
     id,
     name: { type: DataTypes.STRING(60), allowNull: false },
-    phone: { type: DataTypes.STRING(13), allowNull: false },
+    phone: { type: DataTypes.STRING(16), allowNull: false }, // E.164, e.g. +233241234567
     email: { type: DataTypes.STRING(254), allowNull: true },
     emailConfirmedAt: time(),
     pendingEmail: { type: DataTypes.STRING(254), allowNull: true },
     passwordHash: { type: DataTypes.STRING(255), allowNull: false },
     mustChangePassword: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
-    language: { type: DataTypes.ENUM('en', 'tw'), allowNull: false, defaultValue: 'en' },
+    language: { type: DataTypes.STRING(16), allowNull: false, defaultValue: 'en' }, // a tag from src/locale
     sessionVersion: { type: DataTypes.INTEGER.UNSIGNED, allowNull: false, defaultValue: 0 },
     termsVersion: { type: DataTypes.STRING(20), allowNull: true },
     termsAcceptedAt: time(),
@@ -35,7 +35,12 @@ function defineModels(sequelize) {
 
   const Business = sequelize.define('Business', {
     id,
+    // Locale facts (BE4.5): set at sign-up from the country, locked once the
+    // first money record exists (moneyRecordedAt, set from BE7/BE8).
+    country: { type: DataTypes.CHAR(2), allowNull: false },
+    currency: { type: DataTypes.CHAR(3), allowNull: false },
     timezone: { type: DataTypes.STRING(40), allowNull: false, defaultValue: 'Africa/Accra' },
+    moneyRecordedAt: time(),
     status: { type: DataTypes.ENUM('active', 'closing'), allowNull: false, defaultValue: 'active' },
     isPractice: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
     practiceForBusinessId: ref(true),
@@ -50,12 +55,13 @@ function defineModels(sequelize) {
     businessName: { type: DataTypes.STRING(60), allowNull: false },
     receiptPhone: { type: DataTypes.STRING(20), allowNull: true },
     receiptNote: { type: DataTypes.STRING(120), allowNull: true },
-    defaultLanguage: { type: DataTypes.ENUM('en', 'tw'), allowNull: false, defaultValue: 'en' },
+    paymentMethods: { type: DataTypes.JSON, allowNull: false }, // codes from src/locale, e.g. ["cash","mobile_money"]
+    defaultLanguage: { type: DataTypes.STRING(16), allowNull: false, defaultValue: 'en' },
     lowStockThreshold: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 3 },
     returnPeriodDays: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 7 },
-    defaultCreditLimitPesewas: { type: DataTypes.BIGINT, allowNull: true },
+    defaultCreditLimitMinor: { type: DataTypes.BIGINT, allowNull: true }, // whole minor units of the business's currency
     version: { type: DataTypes.INTEGER.UNSIGNED, allowNull: false, defaultValue: 1 },
-    updatedBy: ref(),
+    updatedBy: ref(true), // NULL = a system change (no person); otherwise a member of this business
     createdAt: time(false),
     updatedAt: time(false),
   }, common);
@@ -106,7 +112,7 @@ function defineModels(sequelize) {
     businessId: ref(),
     entity: { type: DataTypes.STRING(40), allowNull: false },
     entityId: ref(),
-    changedBy: ref(),
+    changedBy: ref(true), // NULL = a system change (no person); otherwise a member of this business
     changedAt: time(false),
     before: { type: DataTypes.JSON, allowNull: true },
     after: { type: DataTypes.JSON, allowNull: true },
@@ -122,4 +128,14 @@ function defineModels(sequelize) {
   return { User, Business, BusinessSettings, Location, Membership, EmailToken, ChangeLog };
 }
 
-module.exports = { defineModels };
+// The models holding ONE business's data (they have a businessId column).
+// Route handlers reach them only through scoped() (src/services/scoped.js);
+// a test fails the build otherwise. Every later business table joins this list.
+const BUSINESS_MODELS = ['BusinessSettings', 'Location', 'Membership', 'ChangeLog'];
+
+// Permanent records (sales, repayments, stock movements…): never updated or
+// deleted. Empty until BE7/BE8 add the first ones; scoped().update refuses
+// every model listed here.
+const PERMANENT_MODELS = [];
+
+module.exports = { defineModels, BUSINESS_MODELS, PERMANENT_MODELS };

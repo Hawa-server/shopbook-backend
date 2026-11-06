@@ -8,6 +8,8 @@ The contract between the Shop Book server and the phone app. **The app uses only
 
 Newest first.
 
+- **BE4.5 (International-ready, Ghana first):** money is described in **minor units** of the business's currency (field names end in `Minor`; GHS has 2 decimals, so `12000` = GH₵ 120.00): format it with the business's `currency` rules, not `Intl.NumberFormat`. Phone numbers are **E.164** (`+233…`). Business dates use the **business's time zone**. `language` is an open list of supported tags (launch `en`, `tw`) from the new **`GET /api/reference`** (countries, currencies, languages, payment methods with their names: mobile money is "MoMo" in Ghana). `me.businesses[]` gains `country`, `currency`, `timezone`, `defaultLanguage`, `paymentMethods`, `localeLocked`. Sign-up takes an optional `country` (default `GH`, the only one at launch); sign-in, forgot password and change phone take an optional `country` for reading local numbers. New endpoint `PATCH /api/business/locale` (owner) and error `409 CURRENCY_LOCKED`. The phone `VALIDATION_FAILED` message is now "Enter a valid mobile number, for example 024 123 4567."
+- **BE4 (Isolation):** no change to any endpoint. Tests now prove that every business endpoint answers another business's IDs exactly like unknown ones (`404 NOT_FOUND`, same body), and the database refuses cross-business references.
 - **BE3 (Team):** the **`X-Business` header** (required on every business endpoint), the team endpoints (`GET`/`POST /api/team`, `PATCH`/`DELETE /api/team/:membershipId`, `POST /api/team/:membershipId/reset-password`), **invitations** for people who already have an account (`me.invitations`, `POST /api/auth/invitations/:membershipId/accept` and `…/decline`). `PASSWORD_CHANGE_REQUIRED` now also applies to `confirm-email/send`, `me/phone`, `me/email`. New error codes: `BUSINESS_REQUIRED`, `ACCESS_REMOVED`, `BUSINESS_CLOSING`, `FORBIDDEN`, `PASSWORD_CHANGE_REQUIRED`, `ALREADY_MEMBER`, `ALREADY_INVITED`, `MEMBER_REMOVED`, `OWNER_CANNOT_CHANGE`, `RESET_NOT_ALLOWED`. New enum: member `status`.
 - **BE2 (Accounts):** sign-up (business name, owner, first shop), sign-in by phone number or email, sign-out, the session cookie (idle 30 days, absolute 90 days), `GET`/`PATCH /api/auth/me`, change password, terms (`GET /api/legal/current`, accept-terms, `403 TERMS_REQUIRED`), confirm email and "Send the link again", forgot and reset password, change phone number and email. New error codes: `VALIDATION_FAILED`, `ORIGIN_REQUIRED`, `NOT_SIGNED_IN`, `WRONG_LOGIN`, `WRONG_PASSWORD`, `TERMS_REQUIRED`, `TERMS_VERSION_MISMATCH`, `PHONE_TAKEN`, `EMAIL_TAKEN`, `INVALID_TOKEN`, `NOTHING_TO_CONFIRM`, `EMAIL_NOT_SENT`, `TRY_AGAIN`. New enums: `language`, `role`, business `status`. Email links open the app at `/confirm-email?token=…` and `/reset-password?token=…`.
 - **BE1 (Project setup):** first version. Conventions (base path, `X-Requested-With`, `Origin`, `X-Request-Id`, money, quantities, times, IDs, body limit), the error format and the first error codes (`NOT_FOUND`, `CSRF_HEADER_MISSING`, `ORIGIN_NOT_ALLOWED`, `INVALID_JSON`, `INVALID_REQUEST`, `PAYLOAD_TOO_LARGE`, `RATE_LIMITED`, `INTERNAL_ERROR`), and `GET /api/health`. Not there yet: sign-in and the session cookie (BE2), `X-Business` (BE3), device signing headers and `X-Server-Time` (BE5).
@@ -53,9 +55,11 @@ Sign-up, sign-in, forgot password and reset password must come from the app itse
 
 ### Data formats
 
-- **Money:** whole **pesewas** as integers (`12000` = GH₵ 120.00). Never decimals. Show as "GH₵ 120.00".
+- **Money:** whole **minor units** of the business's currency, as integers. Field names end in `Minor` (`amountMinor`, `retailMinor`…). The business's `currency` (in `me.businesses[]`) says how to write it: for GHS `{ "symbol": "GH₵", "minorUnits": 2, "symbolPosition": "before", "symbolSpace": "\u00a0", "decimalSeparator": ".", "groupSeparator": "," }`, so `12000` → "GH₵ 120.00" and `120050` → "GH₵ 1,200.50" (non-breaking space after the symbol; a negative amount gets "-" in front: "-GH₵ 5.00"). **Format it with the app's own helper from these rules, not `Intl.NumberFormat`**, so every phone shows exactly the same. Never decimals or floating point; a typed "120.5" becomes `12050` by reading the digits.
+- **Phone numbers:** always **E.164** in answers (`+233241234567`). Show them in the country's local form (`024 123 4567` in Ghana: the trunk prefix `0` + the national number, from `GET /api/reference`). WhatsApp links use E.164 without the `+` (`https://wa.me/233241234567`). When sending a phone number the person typed in local form, the business's country is used, or on the sign-in/sign-up screens the optional `country` field (default `GH`).
+- **Languages:** tags from `GET /api/reference` (`en`, `tw` at launch). Any text not translated yet is shown in English.
 - **Quantities:** whole **units** as integers, with the product's `unitScale` (1, or 2 for products sold by the yard: `5` units = "2.5 yards").
-- **Times:** UTC ISO 8601 strings (`"2026-11-01T09:30:00.000Z"`). **Business dates** (a day in the shop) are `YYYY-MM-DD` in `Africa/Accra`.
+- **Times:** UTC ISO 8601 strings (`"2026-11-01T09:30:00.000Z"`). **Business dates** (a day in the shop) are `YYYY-MM-DD` in the **business's time zone** (`me.businesses[].timezone`, IANA, e.g. `Africa/Accra`).
 - **IDs:** UUIDs (lower case), made on the phone with `crypto.randomUUID()` for records the phone creates.
 - **JSON:** request and response bodies are JSON objects.
 
@@ -91,7 +95,7 @@ Decide what to do from **`code`** (stable), never from `message` (wording may ch
 | `INVALID_REQUEST` | 400 | The body couldn't be read (unsupported encoding or character set). | App bug; don't retry. |
 | `PAYLOAD_TOO_LARGE` | 413 | The body is over 1 MB. | Send smaller batches (sync pushes stay well under it at 200 operations). |
 | `RATE_LIMITED` | 429 | Too many requests of this kind. `Retry-After` says how many seconds to wait. | Wait and retry later; show a message only if it's a person's action (for example sign-in). |
-| `VALIDATION_FAILED` | 400 | One or more fields are missing or wrong. `fields` maps each field name to a message (e.g. `{ "phone": "Enter a Ghana mobile number, for example 024 123 4567." }`). | Show each message under its field (translate by field and context); let the person correct it. Don't retry unchanged. |
+| `VALIDATION_FAILED` | 400 | One or more fields are missing or wrong. `fields` maps each field name to a message (e.g. `{ "phone": "Enter a valid mobile number, for example 024 123 4567." }`). | Show each message under its field (translate by field and context); let the person correct it. Don't retry unchanged. |
 | `ORIGIN_REQUIRED` | 403 | An account endpoint (sign-up, sign-in, forgot/reset password) was called without the browser's `Origin` header. | Shouldn't happen from the app (browsers send it). Report via Help. |
 | `NOT_SIGNED_IN` | 401 | No sign-in, or it has ended (30 days unused, 90 days old, password/phone/email changed elsewhere, or signed out). | **Keep all local data and the outbox.** Show the sign-in screen when online; selling continues offline meanwhile. |
 | `WRONG_LOGIN` | 401 | Sign-in failed. Always the same message, whatever was wrong: "Wrong phone number, email or password." | Show the message; let the person try again or use **Forgot password?**. |
@@ -114,6 +118,7 @@ Decide what to do from **`code`** (stable), never from `message` (wording may ch
 | `MEMBER_REMOVED` | 409 | The membership has ended (removed, declined or cancelled). | Refresh the team list. |
 | `OWNER_CANNOT_CHANGE` | 409 | The owner's own membership can't be changed, removed or reset from the team screen. | Don't offer these actions on the owner's row. |
 | `RESET_NOT_ALLOWED` | 403 | The owner tried to reset the password of someone who also belongs to another business. | Show "This person also uses Shop Book with another business. They can reset their password by email, or ask for help." |
+| `CURRENCY_LOCKED` | 409 | The business already has money records, so its country, currency and time zone can't change. | Show "These can't change once money has been recorded." Hide the edit once `localeLocked` is `true`. |
 | `INTERNAL_ERROR` | 500 | Something unexpected went wrong on the server. `message` is "Something went wrong. Reference: \<request id\>". | **Temporary:** keep any unsent records and retry later. Keep the reference (also in `X-Request-Id`) for the Help message. |
 
 Other failures without the error format:
@@ -159,6 +164,48 @@ Is the server running, and can it reach its database? Call it in the background 
 
 ---
 
+### GET /api/reference
+
+The supported countries, currencies, languages and payment methods, with the names to show and the rules to write money and phone numbers. Load it at sign-up (country and language pickers) and keep a copy for formatting.
+
+- **Who:** anyone (no sign-in). **Signed:** no. **Business:** no.
+- **Response 200:**
+
+  ```json
+  {
+    "countries": [{
+      "code": "GH", "name": "Ghana", "dialCode": "233", "trunkPrefix": "0", "nationalNumberLengths": [9],
+      "currency": "GHS", "timezones": ["Africa/Accra"], "defaultLanguage": "en",
+      "paymentMethods": [{ "code": "cash", "name": "Cash" }, { "code": "mobile_money", "name": "MoMo" }]
+    }],
+    "currencies": [{
+      "code": "GHS", "name": "Ghana cedi", "symbol": "GH₵", "minorUnits": 2,
+      "symbolPosition": "before", "symbolSpace": " ", "decimalSeparator": ".", "groupSeparator": ","
+    }],
+    "languages": [
+      { "tag": "en", "name": "English", "nativeName": "English", "status": "complete" },
+      { "tag": "tw", "name": "Twi", "nativeName": "Twi", "status": "draft" }
+    ],
+    "paymentMethods": [{ "code": "cash", "name": "Cash" }, { "code": "mobile_money", "name": "Mobile money" }],
+    "defaults": { "country": "GH", "language": "en" }
+  }
+  ```
+
+- A country's `paymentMethods[].name` is what to show **in that country** (mobile money is "MoMo" in Ghana); the top-level list has the general names. A language with `status: "draft"` isn't fully translated: show English for missing texts. At launch there's one country (Ghana), so the country picker can be preselected and hidden.
+- **Errors:** none. **Rate limit:** none. **Available since:** BE4.5.
+
+### PATCH /api/business/locale
+
+The owner changes the business's country, currency or time zone. Only possible until the business has its first money record (`localeLocked`); after that, `409 CURRENCY_LOCKED`. At launch the only valid values are `GH`, `GHS` and `Africa/Accra`, so the app needn't offer this screen yet.
+
+- **Who:** owner. **Business:** yes (`X-Business`). **Signed:** not yet (from BE5).
+- **Request:** `{ "country": "GH", "currency": "GHS", "timezone": "Africa/Accra" }`: at least one. Changing `country` alone also resets the currency, time zone and payment methods to that country's.
+- **Response 200:** `{ "country": "GH", "currency": { "code": "GHS", "…": "…" }, "timezone": "Africa/Accra", "localeLocked": false }`. Refresh `GET /api/auth/me` afterwards.
+- **Errors:** `409 CURRENCY_LOCKED`, `400 VALIDATION_FAILED` (`fields.country`: not supported; `fields.currency`: not supported; `fields.timezone`: not one of the country's time zones; or nothing to change), plus the business-endpoint errors.
+- **Rate limit:** none. **Available since:** BE4.5.
+
+---
+
 ## Accounts
 
 ### The `me` object
@@ -179,7 +226,15 @@ Sign-up, sign-in, `GET /api/auth/me` and most account changes answer with this o
   },
   "terms": { "currentVersion": "1", "acceptedVersion": "1", "accepted": true },
   "businesses": [
-    { "id": "8a0b1c2d-3e4f-4a5b-8c6d-7e8f9a0b1c2d", "name": "Ama Fabrics", "role": "owner", "isPractice": false, "status": "active" }
+    {
+      "id": "8a0b1c2d-3e4f-4a5b-8c6d-7e8f9a0b1c2d", "name": "Ama Fabrics", "role": "owner", "isPractice": false, "status": "active",
+      "country": "GH",
+      "currency": { "code": "GHS", "symbol": "GH₵", "minorUnits": 2, "symbolPosition": "before", "symbolSpace": "\u00a0", "decimalSeparator": ".", "groupSeparator": "," },
+      "timezone": "Africa/Accra",
+      "defaultLanguage": "en",
+      "paymentMethods": ["cash", "mobile_money"],
+      "localeLocked": false
+    }
   ],
   "invitations": [
     { "membershipId": "5d6e7f80-9a1b-4c2d-8e3f-4a5b6c7d8e9f", "businessName": "Kofi Shoes", "role": "manager", "invitedAt": "2026-11-05T10:00:00.000Z" }
@@ -191,11 +246,11 @@ Sign-up, sign-in, `GET /api/auth/me` and most account changes answer with this o
 |---|---|---|
 | `user.id` | UUID | The person's ID. |
 | `user.name` | string | 1–60 characters. |
-| `user.phone` | string | Always `+233XXXXXXXXX`. Show it as `024 123 4567`. |
+| `user.phone` | string | E.164, e.g. `+233241234567`. Show it in local form, `024 123 4567`. |
 | `user.email` | string or null | Lower case. The owner always has one; staff may not. |
 | `user.emailConfirmed` | boolean | `false` → Settings shows "Email not confirmed. **Send the link again**" (`POST /api/auth/confirm-email/send`). Never blocks the app. |
 | `user.pendingEmail` | string or null | A new email waiting for its link to be tapped; the old `email` stays in use until then. Show "Waiting for you to confirm [pendingEmail]". |
-| `user.language` | `en` or `tw` | The person's app language. |
+| `user.language` | language tag | The person's app language (a tag from `GET /api/reference`). |
 | `user.mustChangePassword` | boolean | `true` → show "Choose your own password" (`POST /api/auth/change-password`) before anything else. (Staff with a temporary password, from BE3.) |
 | `terms.currentVersion` | string | The version in force. |
 | `terms.acceptedVersion` | string or null | The version this person accepted. |
@@ -206,6 +261,12 @@ Sign-up, sign-in, `GET /api/auth/me` and most account changes answer with this o
 | `businesses[].role` | `owner`, `manager` or `associate` | For **display**; the server checks the role itself on every request. |
 | `businesses[].isPractice` | boolean | `true` for a practice shop (BE16). |
 | `businesses[].status` | `active` or `closing` | `closing`: the owner asked to close it (BE15). |
+| `businesses[].country` | string | ISO 3166 code (`GH`). Decides how local phone numbers are read and which payment-method names to show. |
+| `businesses[].currency` | object | `code` (ISO 4217), `symbol`, `minorUnits` (decimals: 0, 2 or 3), `symbolPosition` (`before`/`after`), `symbolSpace` (the non-breaking space), `decimalSeparator`, `groupSeparator`: everything needed to write this business's amounts (see Conventions, Money). |
+| `businesses[].timezone` | string | IANA time zone (`Africa/Accra`): business dates, day closes and "today" use it. |
+| `businesses[].defaultLanguage` | language tag | The business's default language for customers' messages. |
+| `businesses[].paymentMethods` | array of codes | The payment methods this business uses (`["cash", "mobile_money"]` in Ghana); offer only these. Names from `GET /api/reference` (mobile money is "MoMo" in Ghana). |
+| `businesses[].localeLocked` | boolean | `true` once the business has a money record: country, currency and time zone can no longer change. |
 | `invitations` | array | Businesses that invited this person (their phone number already had an account). Oldest first; empty when none. After sign-in, show each: "[businessName] invited you to join as [role]" with **Accept** / **Decline**. |
 | `invitations[].membershipId` | UUID | Use it in the accept/decline endpoints. |
 | `invitations[].businessName` | string | The inviting business's name. |
@@ -255,11 +316,12 @@ Creates a business with its owner and first shop, signs the owner in (sets the s
 | Field | Type | Rules |
 |---|---|---|
 | `name` | string, required | The owner's name, 1–60 characters after trimming. |
-| `phone` | string, required | A Ghana **mobile** number in any usual form (`0241234567`, `024 123 4567`, `+233 24 123 4567`, `233241234567`); stored as `+233241234567`. |
+| `phone` | string, required | A **mobile** number of a supported country, in local form (`0241234567`, `024 123 4567`, read with `country`) or international form (`+233 24 123 4567`, `233241234567`); stored in E.164, `+233241234567`. |
 | `email` | string, required | Trimmed and stored in lower case; at most 254 characters. |
 | `password` | string, required | 8–128 characters, not a very common password. |
 | `businessName` | string, required | 1–60 characters after trimming. Typed only here; later changed in Business settings (`settings.update`, BE5). The first shop gets the same name. |
-| `language` | `en` or `tw`, required | The owner's language and the business's default language for customers. |
+| `language` | language tag, required | The owner's language and the business's default language for customers (`en` or `tw` at launch). |
+| `country` | string, optional | The business's country (ISO 3166). Default `GH`, the only supported country at launch. Sets the currency (GHS), time zone (Africa/Accra), payment methods (cash, mobile money) and how local phone numbers are read. Unsupported → `fields.country`. |
 | `acceptTerms` | `true`, required | The tick "I accept the privacy notice and terms". |
 | `termsVersion` | string, required | `version` from `GET /api/legal/current`. |
 
@@ -270,7 +332,7 @@ Creates a business with its owner and first shop, signs the owner in (sets the s
   ```
 
   `emailSent: false` means the account **was** created but the confirm email couldn't be sent: show "We couldn't send the confirmation email. **Send the link again**" (Settings). Don't repeat the sign-up.
-- **Errors:** `400 VALIDATION_FAILED` (with `fields`: `name`, `phone`, `email`, `password`, `businessName`, `language`, `acceptTerms`), `409 PHONE_TAKEN`, `409 EMAIL_TAKEN`, `409 TERMS_VERSION_MISMATCH`, `403 ORIGIN_REQUIRED`, `429 RATE_LIMITED`.
+- **Errors:** `400 VALIDATION_FAILED` (with `fields`: `name`, `phone`, `email`, `password`, `businessName`, `language`, `country`, `acceptTerms`), `409 PHONE_TAKEN`, `409 EMAIL_TAKEN`, `409 TERMS_VERSION_MISMATCH`, `403 ORIGIN_REQUIRED`, `429 RATE_LIMITED`.
 - **Password messages** (in `fields.password`): "Use at least 8 characters.", "Use at most 128 characters.", "This password is too common. Choose another one."
 - **Rate limit:** 5 per hour per IP address.
 - **Available since:** BE2.
@@ -280,7 +342,7 @@ Creates a business with its owner and first shop, signs the owner in (sets the s
 Signs in with a phone number **or** an email, plus the password. Sets the session cookie.
 
 - **Who:** anyone. **Signed:** no. **Needs `Origin`:** yes.
-- **Request:** `{ "login": "024 123 4567", "password": "kente-cloth-2026" }`. `login` is treated as an email if it contains `@`, otherwise as a phone number (any usual form).
+- **Request:** `{ "login": "024 123 4567", "password": "kente-cloth-2026", "country": "GH" }`. `login` is treated as an email if it contains `@`, otherwise as a phone number (local or international form). `country` (optional, default `GH`) says how to read a local number: the country chosen on the sign-in screen.
 - **Response 200:** the `me` object, and the session cookie. Then check, in this order: `user.mustChangePassword`, `terms.accepted`, `businesses` (empty → "You're not part of any business any more").
 - **Errors:** `401 WRONG_LOGIN` for **any** wrong login or password (never says which), `400 VALIDATION_FAILED` (empty fields), `403 ORIGIN_REQUIRED`, `429 RATE_LIMITED`.
 - **Rate limit:** 10 attempts per 15 minutes per login (the same number typed differently counts together) and 10 per 15 minutes per IP address. Every attempt counts.
@@ -361,7 +423,7 @@ Confirms an email from the link in the email. The link opens the app at **`/conf
 Asks for a password-reset link. **Always** answers the same, whether or not the account exists or has a confirmed email, so nobody can find out who has an account.
 
 - **Who:** anyone. **Signed:** no. **Needs `Origin`:** yes.
-- **Request:** `{ "login": "ama@example.com" }`: a phone number or an email.
+- **Request:** `{ "login": "ama@example.com", "country": "GH" }`: a phone number or an email; `country` optional (default `GH`), as in sign-in.
 - **Response 200:** `{ "message": "If that account has a confirmed email, we've sent a link. Check your inbox and spam." }`. Show it (translated), plus: "No email? Ask your shop owner to reset your password."
 - What happens: only if the account exists **and** its email is confirmed, a reset link goes to that email. Nothing is sent to an unconfirmed email.
 - **Errors:** `400 VALIDATION_FAILED` (empty `login`), `403 ORIGIN_REQUIRED`, `429 RATE_LIMITED`.
@@ -384,9 +446,9 @@ Sets a new password from a reset link. The link opens the app at **`/reset-passw
 Changes the person's phone number (which they sign in with). Ends their **other** sign-ins; this phone stays signed in.
 
 - **Who:** signed in, terms accepted. **Signed:** no.
-- **Request:** `{ "currentPassword": "…", "newPhone": "020 777 0001" }`.
+- **Request:** `{ "currentPassword": "…", "newPhone": "020 777 0001", "country": "GH" }`; `country` optional (default `GH`), how to read a local number.
 - **Response 200:** the `me` object with the new `user.phone`.
-- **Errors:** `400 WRONG_PASSWORD`, `400 VALIDATION_FAILED` (`fields.newPhone`: not a Ghana mobile number, or the same as now), `409 PHONE_TAKEN` (`fields.newPhone`), `401 NOT_SIGNED_IN`, `403 PASSWORD_CHANGE_REQUIRED`, `403 TERMS_REQUIRED`, `429 RATE_LIMITED`.
+- **Errors:** `400 WRONG_PASSWORD`, `400 VALIDATION_FAILED` (`fields.newPhone`: not a valid mobile number, or the same as now), `409 PHONE_TAKEN` (`fields.newPhone`), `401 NOT_SIGNED_IN`, `403 PASSWORD_CHANGE_REQUIRED`, `403 TERMS_REQUIRED`, `429 RATE_LIMITED`.
 - **Rate limit:** shared current-password limit (see change password). **Available since:** BE2.
 
 ### PATCH /api/auth/me/email
@@ -444,7 +506,7 @@ All team endpoints are **owner only** business endpoints: signed in, `X-Business
 |---|---|---|
 | `membershipId` | UUID | Use it in the other team endpoints. |
 | `name` | string | The person's name. For an **invitation** (status `invited` or `declined`, or an invitation cancelled before it was accepted) it's **the name the owner typed**, never the account's own name. |
-| `phone` | string | `+233…`; show as `024 123 4567`. |
+| `phone` | string | E.164 (`+233…`); show in local form, `024 123 4567`. |
 | `email` | string or null | The person's email. Always `null` for invitations (the account's own email is never shown). |
 | `role` | `owner`, `manager` or `associate` | |
 | `status` | `active`, `invited`, `declined`, `removed` | Words: (nothing), "Waiting for them to accept", "Declined", "Removed". |
@@ -477,7 +539,7 @@ Adds a staff member. **Two cases, one answer shape:**
 | Field | Type | Rules |
 |---|---|---|
 | `name` | string, required | 1–60 characters. |
-| `phone` | string, required | Ghana mobile number, any usual form. |
+| `phone` | string, required | A mobile number; a local number is read with the business's country. |
 | `role` | `manager` or `associate`, required | Never `owner`. |
 | `email` | string, optional | Empty or left out: no email (the person can add one later in Settings). |
 
@@ -540,7 +602,8 @@ None yet (from BE5).
 
 | Enum | Values | Words to show |
 |---|---|---|
-| `language` | `en`, `tw` | English, Twi |
+| `language` | `en`, `tw` (from `GET /api/reference`) | English, Twi |
+| payment method | `cash`, `mobile_money` (the business's `paymentMethods`) | Cash, MoMo (names from `GET /api/reference` for the business's country) |
 | `role` | `owner`, `manager`, `associate` | Owner, Manager, Sales associate |
 | business `status` | `active`, `closing` | (nothing), Closing on [date] |
 | member `status` | `active`, `invited`, `declined`, `removed` | (nothing), Waiting for them to accept, Declined, Removed |

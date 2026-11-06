@@ -14,18 +14,19 @@ const { randomUUID } = require('node:crypto');
 const { z } = require('zod');
 const { AppError } = require('../lib/errors');
 const { parseBody, fieldError, fieldRules } = require('../lib/validation');
-const { normalizeGhanaPhone } = require('../lib/phone');
+const { normalizePhone } = require('../lib/phone');
+const locale = require('../locale');
 const { passwordProblem, hashPassword, verifyPassword, getDummyHash } = require('../lib/passwords');
 const { setSessionCookie, clearSessionCookie, requireSession } = require('../lib/session');
 const { requireOrigin } = require('../middleware/csrf');
 const { requireTerms } = require('../middleware/requireTerms');
 const { requirePasswordChanged } = require('../middleware/requireAuth');
-const { recordChange } = require('../services/changeLog');
+const { updateUser } = require('../services/users');
 const { TERMS_VERSION, currentLegal } = require('../legal');
 const { maskEmail } = require('../emails/templates');
 const accounts = require('../services/accounts');
 
-const PHONE_MESSAGE = 'Enter a Ghana mobile number, for example 024 123 4567.';
+const PHONE_MESSAGE = 'Enter a valid mobile number, for example 024 123 4567.';
 const FORGOT_ANSWER = "If that account has a confirmed email, we've sent a link. Check your inbox and spam.";
 
 // Counts one hit on `limiter` for `key` and throws 429 RATE_LIMITED (with
@@ -53,13 +54,6 @@ function checkNewPassword(field, password) {
   if (problem) throw fieldError(field, problem);
 }
 
-// Adds 1 to the user's sessionVersion together with other changes, inside a
-// transaction. Done in SQL ("sessionVersion + 1") so two changes at the same
-// moment can't both write the same number.
-function bumpSession(sequelize) {
-  return sequelize.literal('sessionVersion + 1');
-}
-
 // Gives the phone that made a change a fresh cookie with the new
 // sessionVersion, keeping the original sign-in time (the 90-day limit).
 async function keepThisSignIn(deps, req, res) {
@@ -82,13 +76,16 @@ function signup(deps) {
     password: fieldRules.password(),
     businessName: fieldRules.name("your business's name"),
     language: fieldRules.language(),
+    // The business's country (sets its currency, time zone, payment methods
+    // and how local phone numbers are read). Launch: GH, the default.
+    country: fieldRules.country().default(locale.DEFAULT_COUNTRY),
     acceptTerms: z.literal(true, { error: 'Accept the privacy notice and terms to continue.' }),
     termsVersion: z.string({ error: 'Missing terms version.' }),
   });
 
   return async function handleSignup(req, res) {
     const body = parseBody(schema, req.body);
-    const phone = normalizeGhanaPhone(body.phone);
+    const phone = normalizePhone(body.phone, body.country);
     if (!phone) throw fieldError('phone', PHONE_MESSAGE);
     checkNewPassword('password', body.password);
     if (body.termsVersion !== TERMS_VERSION) {
@@ -106,14 +103,9 @@ function signup(deps) {
           id: randomUUID(), name: body.name, phone, email: body.email, passwordHash,
           language: body.language, termsVersion: TERMS_VERSION, termsAcceptedAt: now,
         }, { transaction });
-        const business = await models.Business.create({ id: randomUUID() }, { transaction });
-        await models.BusinessSettings.create({
-          businessId: business.id, businessName: body.businessName, defaultLanguage: body.language, updatedBy: user.id,
-        }, { transaction });
-        await models.Location.create({ id: randomUUID(), businessId: business.id, name: body.businessName, type: 'shop' }, { transaction });
-        await models.Membership.create({
-          id: randomUUID(), businessId: business.id, userId: user.id, role: 'owner', createdBy: user.id,
-        }, { transaction });
+        await accounts.createBusinessWithOwner(models, transaction, {
+          owner: user, businessName: body.businessName, language: body.language, country: body.country,
+        });
         const token = await accounts.issueEmailToken(models, transaction, { userId: user.id, purpose: 'confirm_email', email: body.email, now });
         return { user, token };
       });
@@ -139,14 +131,17 @@ function signin(deps) {
   const schema = z.object({
     login: z.string({ error: 'Enter your phone number or email.' }).trim().min(1, 'Enter your phone number or email.').max(254),
     password: z.string({ error: 'Enter your password.' }).min(1, 'Enter your password.').max(1000),
+    // How to read a LOCAL phone number (024…): the country chosen on the
+    // sign-in screen. Ignored for emails and international numbers.
+    country: fieldRules.country().default(locale.DEFAULT_COUNTRY),
   });
 
   return async function handleSignin(req, res) {
     const body = parseBody(schema, req.body);
-    limit(deps.limiters.signinByLogin, `login:${accounts.loginKey(body.login).value}`, res);
+    limit(deps.limiters.signinByLogin, `login:${accounts.loginKey(body.login, body.country).value}`, res);
 
     const models = deps.getModels();
-    const user = await accounts.findUserByLogin(models, body.login);
+    const user = await accounts.findUserByLogin(models, body.login, body.country);
     const passwordOk = user
       ? await verifyPassword(user.passwordHash, body.password)
       : (await verifyPassword(await getDummyHash(), body.password), false);
@@ -196,9 +191,8 @@ function changePassword(deps) {
 
     const passwordHash = await hashPassword(body.newPassword);
     const models = deps.getModels();
-    await deps.runTransaction((transaction) => models.User.update(
-      { passwordHash, mustChangePassword: false, sessionVersion: bumpSession(models.User.sequelize) },
-      { where: { id: req.user.id }, transaction },
+    await deps.runTransaction((transaction) => updateUser(
+      models, transaction, req.user.id, { passwordHash, mustChangePassword: false }, { endOtherSignIns: true },
     ));
     const user = await keepThisSignIn(deps, req, res);
     res.json(await accounts.buildMe(models, user));
@@ -289,14 +283,15 @@ function confirmEmail(deps) {
 function forgotPassword(deps) {
   const schema = z.object({
     login: z.string({ error: 'Enter your phone number or email.' }).trim().min(1, 'Enter your phone number or email.').max(254),
+    country: fieldRules.country().default(locale.DEFAULT_COUNTRY),
   });
   return async function handleForgot(req, res) {
     const body = parseBody(schema, req.body);
-    limit(deps.limiters.emailByAccount, `login:${accounts.loginKey(body.login).value}`, res);
+    limit(deps.limiters.emailByAccount, `login:${accounts.loginKey(body.login, body.country).value}`, res);
 
     deps.background.run('forgot_password', async () => {
       const models = deps.getModels();
-      const user = await accounts.findUserByLogin(models, body.login);
+      const user = await accounts.findUserByLogin(models, body.login, body.country);
       if (!user || !user.email || !user.emailConfirmedAt) return; // nothing is sent to an unconfirmed email
       const now = new Date(deps.now());
       const token = await deps.runTransaction((transaction) => accounts.issueEmailToken(models, transaction, {
@@ -332,10 +327,7 @@ function resetPassword(deps) {
       if (!row) throw accounts.invalidToken();
       const user = await models.User.findByPk(row.userId, { transaction });
       if (!user || user.email !== row.email || !user.emailConfirmedAt) throw accounts.invalidToken();
-      await models.User.update(
-        { passwordHash, mustChangePassword: false, sessionVersion: bumpSession(models.User.sequelize) },
-        { where: { id: user.id }, transaction },
-      );
+      await updateUser(models, transaction, user.id, { passwordHash, mustChangePassword: false }, { endOtherSignIns: true });
     });
 
     clearSessionCookie(res, deps.config);
@@ -345,20 +337,21 @@ function resetPassword(deps) {
 
 // PATCH /api/auth/me/phone: { currentPassword, newPhone }. Ends other sign-ins.
 function changePhone(deps) {
-  const schema = z.object({ currentPassword: fieldRules.password(), newPhone: z.string({ error: PHONE_MESSAGE }) });
+  const schema = z.object({
+    currentPassword: fieldRules.password(),
+    newPhone: z.string({ error: PHONE_MESSAGE }),
+    country: fieldRules.country().default(locale.DEFAULT_COUNTRY), // how to read a local number
+  });
   return async function handleChangePhone(req, res) {
     const body = parseBody(schema, req.body);
     await checkCurrentPassword(deps, req, res, body.currentPassword);
-    const phone = normalizeGhanaPhone(body.newPhone);
+    const phone = normalizePhone(body.newPhone, body.country);
     if (!phone) throw fieldError('newPhone', PHONE_MESSAGE);
     if (phone === req.user.phone) throw fieldError('newPhone', 'This is already your phone number.');
 
     const models = deps.getModels();
     try {
-      await deps.runTransaction((transaction) => models.User.update(
-        { phone, sessionVersion: bumpSession(models.User.sequelize) },
-        { where: { id: req.user.id }, transaction },
-      ));
+      await deps.runTransaction((transaction) => updateUser(models, transaction, req.user.id, { phone }, { endOtherSignIns: true }));
     } catch (err) {
       const mapped = accounts.takenError(err);
       if (mapped.code === 'PHONE_TAKEN') mapped.fields = { newPhone: mapped.message };
@@ -388,10 +381,7 @@ function changeEmail(deps) {
     const now = new Date(deps.now());
     const oldEmail = req.user.email;
     const token = await deps.runTransaction(async (transaction) => {
-      await models.User.update(
-        { pendingEmail: body.newEmail, sessionVersion: bumpSession(models.User.sequelize) },
-        { where: { id: req.user.id }, transaction },
-      );
+      await updateUser(models, transaction, req.user.id, { pendingEmail: body.newEmail }, { endOtherSignIns: true });
       return accounts.issueEmailToken(models, transaction, { userId: req.user.id, purpose: 'change_email', email: body.newEmail, now });
     });
 
@@ -423,21 +413,10 @@ function answerInvitation(deps, answer) {
     const models = deps.getModels();
     const now = new Date(deps.now());
 
-    await deps.runTransaction(async (transaction) => {
-      const m = await models.Membership.findOne({
-        where: { id: membershipId, userId: req.user.id, isActive: false, removedAt: null },
-        transaction,
-      });
-      if (!m) throw new AppError(404, 'NOT_FOUND', 'Not found');
-      const changes = answer === 'accept'
-        ? { isActive: true, invitedName: null }
-        : { removedAt: now, declinedAt: now };
-      await m.update(changes, { transaction });
-      await recordChange(models, transaction, {
-        businessId: m.businessId, entity: 'membership', entityId: m.id, changedBy: req.user.id, changedAt: now,
-        before: { status: 'invited', role: m.role }, after: { status: answer === 'accept' ? 'active' : 'declined' },
-      });
-    });
+    const answered = await deps.runTransaction((transaction) => accounts.answerInvitation(models, transaction, {
+      membershipId, userId: req.user.id, answer, now,
+    }));
+    if (!answered) throw new AppError(404, 'NOT_FOUND', 'Not found');
     res.json(await accounts.buildMe(models, req.user));
   };
 }
@@ -455,22 +434,22 @@ function legal() {
 // accepted the current terms; `origin` = the Origin header must be the app's;
 // requirePasswordChanged = no temporary password still waiting to be replaced.
 const authRoutes = [
-  { method: 'GET', path: '/api/legal/current', build: () => [legal()] },
-  { method: 'POST', path: '/api/auth/signup', build: (d) => [requireOrigin(d.config), d.limiters.signupByIp.middleware(), signup(d)] },
-  { method: 'POST', path: '/api/auth/signin', build: (d) => [requireOrigin(d.config), d.limiters.signinByIp.middleware(), signin(d)] },
-  { method: 'POST', path: '/api/auth/signout', build: (d) => [signout(d)] },
-  { method: 'GET', path: '/api/auth/me', build: (d) => [requireSession(d), me(d)] },
-  { method: 'PATCH', path: '/api/auth/me', build: (d) => [requireSession(d), updateMe(d)] },
-  { method: 'POST', path: '/api/auth/change-password', build: (d) => [requireSession(d), changePassword(d)] },
-  { method: 'POST', path: '/api/auth/accept-terms', build: (d) => [requireSession(d), acceptTerms(d)] },
-  { method: 'POST', path: '/api/auth/confirm-email/send', build: (d) => [requireSession(d), requirePasswordChanged, requireTerms, d.limiters.emailByIp.middleware(), resendConfirmation(d)] },
-  { method: 'POST', path: '/api/auth/confirm-email', build: (d) => [confirmEmail(d)] },
-  { method: 'POST', path: '/api/auth/forgot-password', build: (d) => [requireOrigin(d.config), d.limiters.emailByIp.middleware(), forgotPassword(d)] },
-  { method: 'POST', path: '/api/auth/reset-password', build: (d) => [requireOrigin(d.config), resetPassword(d)] },
-  { method: 'PATCH', path: '/api/auth/me/phone', build: (d) => [requireSession(d), requirePasswordChanged, requireTerms, changePhone(d)] },
-  { method: 'PATCH', path: '/api/auth/me/email', build: (d) => [requireSession(d), requirePasswordChanged, requireTerms, changeEmail(d)] },
-  { method: 'POST', path: '/api/auth/invitations/:membershipId/accept', build: (d) => [requireSession(d), requirePasswordChanged, requireTerms, answerInvitation(d, 'accept')] },
-  { method: 'POST', path: '/api/auth/invitations/:membershipId/decline', build: (d) => [requireSession(d), requirePasswordChanged, requireTerms, answerInvitation(d, 'decline')] },
+  { business: false, method: 'GET', path: '/api/legal/current', build: () => [legal()] },
+  { business: false, method: 'POST', path: '/api/auth/signup', build: (d) => [requireOrigin(d.config), d.limiters.signupByIp.middleware(), signup(d)] },
+  { business: false, method: 'POST', path: '/api/auth/signin', build: (d) => [requireOrigin(d.config), d.limiters.signinByIp.middleware(), signin(d)] },
+  { business: false, method: 'POST', path: '/api/auth/signout', build: (d) => [signout(d)] },
+  { business: false, method: 'GET', path: '/api/auth/me', build: (d) => [requireSession(d), me(d)] },
+  { business: false, method: 'PATCH', path: '/api/auth/me', build: (d) => [requireSession(d), updateMe(d)] },
+  { business: false, method: 'POST', path: '/api/auth/change-password', build: (d) => [requireSession(d), changePassword(d)] },
+  { business: false, method: 'POST', path: '/api/auth/accept-terms', build: (d) => [requireSession(d), acceptTerms(d)] },
+  { business: false, method: 'POST', path: '/api/auth/confirm-email/send', build: (d) => [requireSession(d), requirePasswordChanged, requireTerms, d.limiters.emailByIp.middleware(), resendConfirmation(d)] },
+  { business: false, method: 'POST', path: '/api/auth/confirm-email', build: (d) => [confirmEmail(d)] },
+  { business: false, method: 'POST', path: '/api/auth/forgot-password', build: (d) => [requireOrigin(d.config), d.limiters.emailByIp.middleware(), forgotPassword(d)] },
+  { business: false, method: 'POST', path: '/api/auth/reset-password', build: (d) => [requireOrigin(d.config), resetPassword(d)] },
+  { business: false, method: 'PATCH', path: '/api/auth/me/phone', build: (d) => [requireSession(d), requirePasswordChanged, requireTerms, changePhone(d)] },
+  { business: false, method: 'PATCH', path: '/api/auth/me/email', build: (d) => [requireSession(d), requirePasswordChanged, requireTerms, changeEmail(d)] },
+  { business: false, method: 'POST', path: '/api/auth/invitations/:membershipId/accept', build: (d) => [requireSession(d), requirePasswordChanged, requireTerms, answerInvitation(d, 'accept')] },
+  { business: false, method: 'POST', path: '/api/auth/invitations/:membershipId/decline', build: (d) => [requireSession(d), requirePasswordChanged, requireTerms, answerInvitation(d, 'decline')] },
 ];
 
 module.exports = { authRoutes };

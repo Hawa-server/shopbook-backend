@@ -6,15 +6,20 @@
 const { healthHandler } = require('./health');
 const { authRoutes } = require('./auth');
 const { teamRoutes } = require('./team');
+const { businessRoutes } = require('./business');
 
-// Each entry: the HTTP method, the full path (with /api), and `build`, which
+// Each entry: the HTTP method, the full path (with /api), `business` (true if
+// it works inside one business: it then needs X-Business and requireAuth, and
+// must have a case in the isolation test; false otherwise; a test fails if
+// it's missing), and `build`, which
 // receives the app's dependencies and returns the route's middleware and
 // handler in order. Paths use Express syntax (`/api/team/:membershipId`), and
 // docs/api.md uses the same text in its `### METHOD /path` headings.
 const routes = [
-  { method: 'GET', path: '/api/health', build: (deps) => [healthHandler(deps)] },
+  { method: 'GET', path: '/api/health', business: false, build: (deps) => [healthHandler(deps)] },
   ...authRoutes,
   ...teamRoutes,
+  ...businessRoutes,
 ];
 
 module.exports = { routes };

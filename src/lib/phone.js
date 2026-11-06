@@ -1,30 +1,52 @@
-// Ghana mobile numbers, written in the project (no library). People type the
-// same number in many ways (024 123 4567, 24-123-4567, +233 24 123 4567), so
-// every number is turned into one form, +233XXXXXXXXX, before it's stored or
-// compared. Otherwise one person could end up with two accounts, or fail to
-// sign in with the number they actually typed.
+// Phone numbers, written in the project (no library). People type the same
+// number in many ways (024 123 4567, +233 24 123 4567, 00233…), so every
+// number is turned into one international form, E.164 (+<country code>
+// <number>, e.g. +233241234567), before it's stored or compared. Otherwise
+// one person could end up with two accounts, or fail to sign in with the
+// number they typed. WhatsApp links need E.164 too.
+//
+// The rules per country come from the country table (src/locale). Only
+// supported countries' numbers are accepted (launch: Ghana).
 
-// The first two digits after +233 that belong to mobile networks (MTN,
-// Telecel, AT and others). Update this list if Ghana adds new prefixes.
-const MOBILE_PREFIXES = new Set(['20', '23', '24', '25', '26', '27', '28', '50', '53', '54', '55', '56', '57', '59']);
+const { COUNTRIES, DEFAULT_COUNTRY } = require('../locale');
 
-// Returns the number as +233XXXXXXXXX, or null if it isn't a Ghana mobile
-// number. Accepts 0XXXXXXXXX, XXXXXXXXX, 233XXXXXXXXX, +233XXXXXXXXX and
-// 00233XXXXXXXXX, with spaces, dashes, dots or brackets anywhere.
-function normalizeGhanaPhone(input) {
+// Checks a national number (without trunk prefix) against a country's rules.
+function validNational(rules, national) {
+  if (!rules.nationalNumberLengths.includes(national.length)) return false;
+  if (rules.mobilePrefixes && !rules.mobilePrefixes.some((p) => national.startsWith(p))) return false;
+  return true;
+}
+
+// Returns the number in E.164, or null if it isn't a valid mobile number of
+// a supported country. `countryCode` says how to read a LOCAL number
+// (0241234567 or 241234567): the business's country, or the country chosen
+// on the sign-in screen. An international number (+233…, 00233…, 233…) is
+// read by its own country code. Spaces, dashes, dots and brackets are ignored.
+function normalizePhone(input, countryCode = DEFAULT_COUNTRY) {
   if (typeof input !== 'string') return null;
   const compact = input.trim().replace(/[\s\-().]/g, '');
   if (!/^\+?\d+$/.test(compact)) return null;
 
-  let digits = compact.replace(/^\+/, '');
-  if (digits.startsWith('00233')) digits = digits.slice(5);
-  else if (digits.startsWith('233') && digits.length === 12) digits = digits.slice(3);
-  else if (digits.startsWith('0') && digits.length === 10) digits = digits.slice(1);
-  else if (compact.startsWith('+')) return null; // another country's code
+  const international = compact.startsWith('+') ? compact.slice(1) : compact.startsWith('00') ? compact.slice(2) : null;
+  if (international !== null) {
+    for (const rules of Object.values(COUNTRIES)) {
+      if (international.startsWith(rules.dialCode)) {
+        const national = international.slice(rules.dialCode.length);
+        return validNational(rules, national) ? `+${rules.dialCode}${national}` : null;
+      }
+    }
+    return null; // a country we don't support
+  }
 
-  if (!/^\d{9}$/.test(digits)) return null;
-  if (!MOBILE_PREFIXES.has(digits.slice(0, 2))) return null;
-  return `+233${digits}`;
+  const rules = COUNTRIES[countryCode];
+  if (!rules) return null;
+  let national = compact;
+  if (national.startsWith(rules.dialCode) && validNational(rules, national.slice(rules.dialCode.length))) {
+    national = national.slice(rules.dialCode.length); // typed with the country code but no +
+  } else if (rules.trunkPrefix && national.startsWith(rules.trunkPrefix)) {
+    national = national.slice(rules.trunkPrefix.length);
+  }
+  return validNational(rules, national) ? `+${rules.dialCode}${national}` : null;
 }
 
-module.exports = { normalizeGhanaPhone, MOBILE_PREFIXES };
+module.exports = { normalizePhone };

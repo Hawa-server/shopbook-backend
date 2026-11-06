@@ -109,7 +109,7 @@ describe('adding a new staff member', () => {
     const owner2 = await o.agent.post('/api/team').set(biz(o.businessId)).send({ name: 'X', phone: '0201112233', role: 'owner' });
     expect(owner2.body.error.fields.role).toBeDefined();
     const badPhone = await o.agent.post('/api/team').set(biz(o.businessId)).send({ name: 'X', phone: '0302123456', role: 'manager' });
-    expect(badPhone.body.error.fields.phone).toMatch(/Ghana mobile/);
+    expect(badPhone.body.error.fields.phone).toMatch(/valid mobile number/);
   });
 });
 

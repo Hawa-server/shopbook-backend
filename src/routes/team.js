@@ -14,17 +14,17 @@
 
 const { randomUUID } = require('node:crypto');
 const { z } = require('zod');
-const { Op } = require('sequelize');
 const { AppError } = require('../lib/errors');
 const { parseBody, fieldError, fieldRules } = require('../lib/validation');
-const { normalizeGhanaPhone } = require('../lib/phone');
+const { normalizePhone } = require('../lib/phone');
 const { hashPassword, generateTemporaryPassword } = require('../lib/passwords');
 const { requireSession } = require('../lib/session');
 const { requireAuth, requireRole } = require('../middleware/requireAuth');
-const { recordChange } = require('../services/changeLog');
+const { scoped } = require('../services/scoped');
+const { updateUser } = require('../services/users');
 const accounts = require('../services/accounts');
 
-const PHONE_MESSAGE = 'Enter a Ghana mobile number, for example 024 123 4567.';
+const PHONE_MESSAGE = 'Enter a valid mobile number, for example 024 123 4567.';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const STAFF_ROLE = () => z.enum(['manager', 'associate'], { error: 'Choose Manager or Sales associate.' });
 
@@ -57,17 +57,30 @@ function memberView(m) {
 }
 
 // Loads one membership of THIS business by its ID (with its account), inside
-// `transaction` if given. Anything else, including another business's
-// membership ID, is 404: as if it didn't exist.
-async function findMemberOrNotFound(models, businessId, membershipId, transaction) {
+// `transaction` if given, through scoped() (so only this business's rows can
+// match). Anything else, including another business's membership ID, is 404:
+// exactly as if it didn't exist.
+async function findMemberOrNotFound(s, models, membershipId, transaction) {
   if (!UUID.test(String(membershipId))) throw new AppError(404, 'NOT_FOUND', 'Not found');
-  const m = await models.Membership.findOne({
-    where: { id: membershipId, businessId },
+  const m = await s.Membership.findOne({
+    where: { id: membershipId },
     include: [{ model: models.User, as: 'user' }],
     transaction,
   });
   if (!m) throw new AppError(404, 'NOT_FOUND', 'Not found');
   return m;
+}
+
+// Adds a ChangeLog row for a membership, through scoped() (it sets businessId).
+function logChange(s, transaction, { membershipId, changedBy, changedAt, before = null, after = null }) {
+  return s.ChangeLog.create({
+    id: randomUUID(), entity: 'membership', entityId: membershipId, changedBy, changedAt, before, after,
+  }, { transaction });
+}
+
+// Applies `changes` to one membership of this business through scoped().
+function updateMember(s, transaction, membershipId, changes) {
+  return s.Membership.update(changes, { where: { id: membershipId }, transaction });
 }
 
 // The owner's own row can never be changed, removed or reset here (AC11).
@@ -94,8 +107,7 @@ function listTeam(deps) {
   const order = { active: 0, invited: 1, declined: 2, removed: 3 };
   return async function handleList(req, res) {
     const models = deps.getModels();
-    const rows = await models.Membership.findAll({
-      where: { businessId: req.business.id },
+    const rows = await scoped(req, models).Membership.findAll({
       include: [{ model: models.User, as: 'user' }],
       order: [['createdAt', 'ASC']],
     });
@@ -121,7 +133,7 @@ function addMember(deps) {
   return async function handleAdd(req, res) {
     limitTeamAction(deps.limiters.teamAddByOwner, deps.limiters.teamAddByIp, req, res);
     const body = parseBody(schema, req.body);
-    const phone = normalizeGhanaPhone(body.phone);
+    const phone = normalizePhone(body.phone, req.business.country); // local numbers read with the business's country
     if (!phone) throw fieldError('phone', PHONE_MESSAGE);
 
     // Made (and hashed) every time, before the transaction, so adding a new
@@ -129,51 +141,52 @@ function addMember(deps) {
     const temporaryPassword = generateTemporaryPassword();
     const passwordHash = await hashPassword(temporaryPassword);
     const models = deps.getModels();
+    const s = scoped(req, models);
     const now = new Date(deps.now());
-    const businessId = req.business.id;
 
     let outcome;
     try {
       outcome = await deps.runTransaction(async (transaction) => {
-        const log = (m, after, before = null) => recordChange(models, transaction, {
-          businessId, entity: 'membership', entityId: m.id, changedBy: req.user.id, changedAt: now, before, after,
+        const log = (membershipId, after, before = null) => logChange(s, transaction, {
+          membershipId, changedBy: req.user.id, changedAt: now, before, after,
         });
+        // User isn't business data (a person can belong to several businesses).
         const existingUser = await models.User.findOne({ where: { phone }, transaction });
 
         if (existingUser) {
-          const existing = await models.Membership.findOne({ where: { businessId, userId: existingUser.id }, transaction });
+          const existing = await s.Membership.findOne({ where: { userId: existingUser.id }, transaction });
           if (existing && existing.isActive) throw new AppError(409, 'ALREADY_MEMBER', 'This person is already in your team.');
           if (existing && !existing.removedAt) throw new AppError(409, 'ALREADY_INVITED', 'This person has already been invited.');
 
-          let membership;
+          let membershipId;
           if (existing) { // removed or declined before: invite again
-            const before = { status: statusOf(existing), role: existing.role };
-            await existing.update({ role: body.role, invitedName: body.name, invitedAt: now, removedAt: null, declinedAt: null }, { transaction });
-            membership = existing;
-            await log(membership, { status: 'invited', role: body.role, name: body.name }, before);
+            membershipId = existing.id;
+            await updateMember(s, transaction, membershipId, {
+              role: body.role, invitedName: body.name, invitedAt: now, removedAt: null, declinedAt: null,
+            });
+            await log(membershipId, { status: 'invited', role: body.role, name: body.name }, { status: statusOf(existing), role: existing.role });
           } else {
-            membership = await models.Membership.create({
-              id: randomUUID(), businessId, userId: existingUser.id, role: body.role,
+            membershipId = randomUUID();
+            await s.Membership.create({
+              id: membershipId, userId: existingUser.id, role: body.role,
               invitedName: body.name, invitedAt: now, isActive: false, createdBy: req.user.id,
             }, { transaction });
-            await log(membership, { status: 'invited', role: body.role, name: body.name });
+            await log(membershipId, { status: 'invited', role: body.role, name: body.name });
           }
-          membership.user = existingUser;
-          return { membership, invited: true };
+          return { membership: await findMemberOrNotFound(s, models, membershipId, transaction), invited: true };
         }
 
         const user = await models.User.create({
           id: randomUUID(), name: body.name, phone, email: body.email ?? null, passwordHash,
           mustChangePassword: true, language: req.user.language,
         }, { transaction });
-        const membership = await models.Membership.create({
-          id: randomUUID(), businessId, userId: user.id, role: body.role, createdBy: req.user.id,
-        }, { transaction });
-        await log(membership, { status: 'active', role: body.role, name: body.name, newAccount: true });
+        const membershipId = randomUUID();
+        await s.Membership.create({ id: membershipId, userId: user.id, role: body.role, createdBy: req.user.id }, { transaction });
+        await log(membershipId, { status: 'active', role: body.role, name: body.name, newAccount: true });
+        const membership = await findMemberOrNotFound(s, models, membershipId, transaction);
         const token = body.email
           ? await accounts.issueEmailToken(models, transaction, { userId: user.id, purpose: 'confirm_email', email: body.email, now })
           : null;
-        membership.user = user;
         return { membership, invited: false, token };
       });
     } catch (err) {
@@ -202,18 +215,15 @@ function changeRole(deps) {
     const body = parseBody(schema, req.body);
     const models = deps.getModels();
     const now = new Date(deps.now());
+    const s = scoped(req, models);
     const member = await deps.runTransaction(async (transaction) => {
-      const m = await findMemberOrNotFound(models, req.business.id, req.params.membershipId, transaction);
+      const m = await findMemberOrNotFound(s, models, req.params.membershipId, transaction);
       refuseOwnerRow(m);
       if (m.removedAt) throw new AppError(409, 'MEMBER_REMOVED', 'This person is no longer in your team.');
-      if (m.role !== body.role) {
-        const before = { role: m.role };
-        await m.update({ role: body.role }, { transaction });
-        await recordChange(models, transaction, {
-          businessId: req.business.id, entity: 'membership', entityId: m.id, changedBy: req.user.id, changedAt: now, before, after: { role: body.role },
-        });
-      }
-      return m;
+      if (m.role === body.role) return m;
+      await updateMember(s, transaction, m.id, { role: body.role });
+      await logChange(s, transaction, { membershipId: m.id, changedBy: req.user.id, changedAt: now, before: { role: m.role }, after: { role: body.role } });
+      return findMemberOrNotFound(s, models, m.id, transaction);
     });
     res.json({ member: memberView(member) });
   };
@@ -231,30 +241,21 @@ function resetPassword(deps) {
     const passwordHash = await hashPassword(temporaryPassword);
     const now = new Date(deps.now());
 
+    const s = scoped(req, models);
     const member = await deps.runTransaction(async (transaction) => {
-      const m = await findMemberOrNotFound(models, req.business.id, req.params.membershipId, transaction);
+      const m = await findMemberOrNotFound(s, models, req.params.membershipId, transaction);
       refuseOwnerRow(m);
       if (!m.isActive) throw new AppError(409, 'MEMBER_REMOVED', 'This person is no longer in your team.');
 
-      const elsewhere = await models.Membership.count({
-        where: { userId: m.userId, isActive: true, businessId: { [Op.ne]: req.business.id } },
-        include: [{ model: models.Business, as: 'business', where: { isPractice: false } }],
-        transaction,
-      });
-      if (elsewhere > 0) {
+      if (await accounts.belongsToAnotherRealBusiness(models, transaction, { userId: m.userId, businessId: req.business.id })) {
         throw new AppError(403, 'RESET_NOT_ALLOWED', 'This person also uses Shop Book with another business. They can reset their password by email, or ask for help.');
       }
 
-      await models.User.update(
-        { passwordHash, mustChangePassword: true, sessionVersion: models.User.sequelize.literal('sessionVersion + 1') },
-        { where: { id: m.userId }, transaction },
-      );
-      await recordChange(models, transaction, {
-        businessId: req.business.id, entity: 'membership', entityId: m.id, changedBy: req.user.id, changedAt: now,
-        after: { event: 'password_reset' }, // never the password itself
+      await updateUser(models, transaction, m.userId, { passwordHash, mustChangePassword: true }, { endOtherSignIns: true });
+      await logChange(s, transaction, {
+        membershipId: m.id, changedBy: req.user.id, changedAt: now, after: { event: 'password_reset' }, // never the password itself
       });
-      await m.user.reload({ transaction });
-      return m;
+      return findMemberOrNotFound(s, models, m.id, transaction);
     });
     res.json({ member: memberView(member), temporaryPassword });
   };
@@ -268,17 +269,16 @@ function removeMember(deps) {
   return async function handleRemove(req, res) {
     const models = deps.getModels();
     const now = new Date(deps.now());
+    const s = scoped(req, models);
     const member = await deps.runTransaction(async (transaction) => {
-      const m = await findMemberOrNotFound(models, req.business.id, req.params.membershipId, transaction);
+      const m = await findMemberOrNotFound(s, models, req.params.membershipId, transaction);
       refuseOwnerRow(m);
       if (m.removedAt) throw new AppError(409, 'MEMBER_REMOVED', 'This person is no longer in your team.');
-      const before = { status: statusOf(m), role: m.role };
-      await m.update({ isActive: false, removedAt: now }, { transaction });
-      await recordChange(models, transaction, {
-        businessId: req.business.id, entity: 'membership', entityId: m.id, changedBy: req.user.id, changedAt: now,
-        before, after: { status: 'removed' },
+      await updateMember(s, transaction, m.id, { isActive: false, removedAt: now });
+      await logChange(s, transaction, {
+        membershipId: m.id, changedBy: req.user.id, changedAt: now, before: { status: statusOf(m), role: m.role }, after: { status: 'removed' },
       });
-      return m;
+      return findMemberOrNotFound(s, models, m.id, transaction);
     });
     res.json({ member: memberView(member) });
   };
@@ -290,11 +290,11 @@ function removeMember(deps) {
 const ownerOnly = (d) => [requireSession(d), requireAuth(d), requireRole('owner')];
 
 const teamRoutes = [
-  { method: 'GET', path: '/api/team', build: (d) => [...ownerOnly(d), listTeam(d)] },
-  { method: 'POST', path: '/api/team', build: (d) => [...ownerOnly(d), addMember(d)] },
-  { method: 'PATCH', path: '/api/team/:membershipId', build: (d) => [...ownerOnly(d), changeRole(d)] },
-  { method: 'POST', path: '/api/team/:membershipId/reset-password', build: (d) => [...ownerOnly(d), resetPassword(d)] },
-  { method: 'DELETE', path: '/api/team/:membershipId', build: (d) => [...ownerOnly(d), removeMember(d)] },
+  { method: 'GET', path: '/api/team', business: true, build: (d) => [...ownerOnly(d), listTeam(d)] },
+  { method: 'POST', path: '/api/team', business: true, build: (d) => [...ownerOnly(d), addMember(d)] },
+  { method: 'PATCH', path: '/api/team/:membershipId', business: true, build: (d) => [...ownerOnly(d), changeRole(d)] },
+  { method: 'POST', path: '/api/team/:membershipId/reset-password', business: true, build: (d) => [...ownerOnly(d), resetPassword(d)] },
+  { method: 'DELETE', path: '/api/team/:membershipId', business: true, build: (d) => [...ownerOnly(d), removeMember(d)] },
 ];
 
 module.exports = { teamRoutes, memberView, statusOf };
