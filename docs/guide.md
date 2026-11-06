@@ -206,3 +206,107 @@ Every team change (adding or inviting, accepting, declining, a role change, a pa
 ### The database's state rule for memberships
 
 A membership can only be in one of three states, enforced by a `CHECK` in MySQL: **active**; **invited** (not active, not ended, with an invitation time); **ended** (removed, or declined). An owner can never be an invitation, and the one-active-owner key from BE2 still applies.
+
+---
+
+## BE4: keeping businesses apart
+
+Every shop's records are private: no other business, not even the neighbour, may see or change them. That's protected in **three layers**, so one mistake is never enough to break it.
+
+### Layer 1: `requireAuth` chooses the business from the database
+
+As in BE3: the business comes from the person's own memberships, read from the database on every request, never from what the phone claims.
+
+### Layer 2: `scoped()`, the only way handlers touch business tables
+
+`src/services/scoped.js` gives each business table five methods: `findOne`, `findAll`, `count`, `create` and `update`. Every one of them adds `businessId = <the request's business>` by itself:
+
+```js
+const s = scoped(req, models);
+await s.Membership.findOne({ where: { id: membershipId } });
+// really runs: WHERE id = … AND businessId = <this business>
+```
+
+- A query that tries to set its own `businessId` is refused (a bug, answered as a 500).
+- `create` sets `businessId` itself; `update` needs a `where` and can never change `businessId`.
+- There's **no `destroy`**: business records are only ever deleted by `deleteBusinessData`.
+- `update` refuses **permanent records** (sales, repayments… as they arrive), which are never changed.
+
+**Another business's ID is answered exactly like an ID that doesn't exist** (404, same words): a scoped search simply finds nothing. So nobody can even learn that a record exists in someone else's shop.
+
+A test reads the code and fails if any file in `src/routes/` touches a business table directly or runs SQL itself. The few places that genuinely work across businesses (creating a business at sign-up, a person's own memberships and invitations, the "do they belong elsewhere?" check before a reset) live in `src/services/`, each with a comment saying why.
+
+### Layer 3: the database refuses cross-business links (composite foreign keys)
+
+Every business table has a unique key on `(businessId, id)`. When one business table points at another, it does so with **both** columns:
+
+```sql
+-- in the migration of a table that points at a product (e.g. SaleItem, BE8):
+CONSTRAINT fk_saleitem_product FOREIGN KEY (businessId, productId)
+  REFERENCES Product (businessId, id)
+```
+
+Now a sale line of business A pointing at a product of business B is impossible: the pair `(A, B's product)` doesn't exist in `Product`, so MySQL refuses the row, even if the code had a bug. **Every later migration follows this pattern** for references between business tables.
+
+The first two (BE4):
+
+- `ChangeLog (businessId, changedBy)` → `Membership (businessId, userId)`: a change in A can only be recorded as made by someone with a membership in A.
+- `BusinessSettings (businessId, updatedBy)` → `Membership (businessId, userId)`: settings can only be marked as edited by a member of that business.
+
+**NULL means "a system change".** `changedBy` and `updatedBy` may be empty when no person made the change (later scheduled jobs, BE13 and BE15). MySQL skips a foreign key check when one of its columns is NULL, so such rows are accepted; a test checks it.
+
+### Proving it: `npm run test:isolation`
+
+`tests/isolation/isolation.test.js` builds two businesses, A and B, each with an owner, a staff member, an invitation and a removed member, then:
+
+- tries **every business endpoint** with B's IDs while working in A, and checks the answer is identical to a made-up ID (404) and that B's records didn't change;
+- sends `X-Business: B` from A's people (404 everywhere);
+- tries to answer B's invitations from A (404);
+- inserts rows **straight in MySQL** that would link A to B's people, and checks the database refuses them.
+
+It also **refuses to pass** if a route is marked `business: true` without a case, and another test refuses any route Express has that isn't marked `business: true` or `false`. So every later task must add its own isolation cases, or the build fails.
+
+### Deleting: only two places
+
+Only `deleteBusinessData` (BE15/BE16) deletes business records. The one other kind of delete is **housekeeping** of short-lived technical rows (expired nonces from BE5), and only those listed in `src/services/housekeeping.js`. That list is empty now, and a test pins it, so adding anything needs the owner's OK.
+
+---
+
+## BE4.5: international-ready, Ghana first
+
+Shop Book is built so a business in another country could use it (Decision F-27), but **only Ghana is offered** until another country's legal texts, payment methods and translations are ready. So the code never assumes Ghana; it reads it from the business or from the reference tables.
+
+### The reference tables (`src/locale/`)
+
+Plain data, changed only by a code change with tests:
+
+- **Countries** (launch: GH): dialling code `233`, trunk prefix `0`, 9-digit national numbers with the mobile prefixes, currency GHS, time zone `Africa/Accra`, payment methods cash and mobile money (shown "MoMo"), default language English.
+- **Currencies** (launch: GHS): `minorUnits` 2 (pesewas), the symbol `GH₵`, and exactly how to write an amount.
+- **Languages** (launch: `en` complete, `tw` draft): anything not translated falls back to English.
+- **Payment methods:** `cash`, `mobile_money`.
+
+The phone gets them from `GET /api/reference`.
+
+### Money in minor units, written the same everywhere
+
+Money is always a **whole number of the currency's smallest unit** (pesewas for GHS), in fields ending in `Minor`. Never decimals: `0.1 + 0.2` isn't exactly `0.3` in floating point, and a shop's money must never drift. How many decimals to show comes from the currency table.
+
+`src/locale/money.js` writes an amount using only integer arithmetic: `120050` → "GH₵ 1,200.50", with a **non-breaking space** after the symbol so it never wraps onto two lines. The phone app writes amounts with the same rules (not the browser's `Intl.NumberFormat`, which can differ from one phone to another), so a receipt says exactly the same thing on every phone and on the server.
+
+### Phone numbers in E.164
+
+Every phone number is stored as **E.164**: `+`, the country code, then the number (`+233241234567`). A number typed in local form (`024 123 4567`) is read using a country: the business's country, or the one chosen on the sign-in screen (Ghana by default). The database refuses anything that isn't E.164. One form means one account per number, and WhatsApp links work.
+
+### Each business's country, currency and time zone
+
+A business gets its country at sign-up (Ghana by default), and with it its currency, time zone and payment methods. **Business days use the business's own time zone**, so "today" means the shop's today.
+
+These three are **locked once money has been recorded** (`Business.moneyRecordedAt`, set by the first sale, repayment, debt brought forward, write-off or expense from BE8 on). Changing the currency afterwards would make every stored amount mean something else, and changing the time zone would move past sales to different days. Before that, the owner can change them (`PATCH /api/business/locale`); after it, the answer is `409 CURRENCY_LOCKED`.
+
+### Payment methods per business
+
+Each business lists the methods it uses (`paymentMethods`: cash and mobile money in Ghana). From BE8 a payment in any other method is refused (`PAYMENT_METHOD_NOT_ENABLED`). The sale rules don't change: what was paid is the sum of the payments, whatever their method. Day closes (BE12) check **each method separately**: the drawer for cash, the MoMo balance for mobile money.
+
+### The migration
+
+`migrations/20261107100000-international.js` turned the existing data international without changing its meaning: every existing business became Ghana, GHS and Africa/Accra with cash and mobile money; languages became open tags (values kept); the phone rule became E.164 (existing `+233…` numbers already fit); `defaultCreditLimitPesewas` became `defaultCreditLimitMinor`.

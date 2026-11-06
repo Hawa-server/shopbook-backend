@@ -56,7 +56,7 @@ describe('POST /api/auth/signup', () => {
   test.each([
     ['a password under 8 characters', { password: 'short1' }, 'password', /at least 8/],
     ['a common password', { password: 'Password123' }, 'password', /too common/],
-    ['a phone number that is not a Ghana mobile', { phone: '0301234567' }, 'phone', /Ghana mobile/],
+    ['a phone number that is not a Ghana mobile', { phone: '0301234567' }, 'phone', /valid mobile number/],
     ['a bad email', { email: 'not-an-email' }, 'email', /valid email/],
     ['terms not accepted', { acceptTerms: false }, 'acceptTerms', /Accept the privacy notice/],
     ['no business name', { businessName: '   ' }, 'businessName', /business's name/],

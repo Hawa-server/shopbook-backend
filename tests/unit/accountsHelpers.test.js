@@ -2,7 +2,6 @@
 // and hashing, one-time tokens, and the email adapter's three modes (with a
 // fake fetch for Brevo, so nothing is really sent).
 
-const { normalizeGhanaPhone } = require('../../src/lib/phone');
 const { passwordProblem, hashPassword, verifyPassword } = require('../../src/lib/passwords');
 const { createToken, hashToken, sameHash } = require('../../src/lib/tokens');
 const { createEmailSender, BREVO_URL } = require('../../src/lib/email');
@@ -10,34 +9,7 @@ const { renderEmail, maskEmail } = require('../../src/emails/templates');
 const { createLogger } = require('../../src/lib/logger');
 const { testConfig } = require('../helpers/testApp');
 
-describe('normalizeGhanaPhone', () => {
-  test.each([
-    ['0241234567', '+233241234567'],
-    ['024 123 4567', '+233241234567'],
-    ['024-123-4567', '+233241234567'],
-    ['241234567', '+233241234567'],
-    ['+233241234567', '+233241234567'],
-    ['+233 24 123 4567', '+233241234567'],
-    ['233241234567', '+233241234567'],
-    ['00233241234567', '+233241234567'],
-    ['(020) 123 4567', '+233201234567'],
-    ['0551234567', '+233551234567'],
-  ])('%p → %p', (input, expected) => {
-    expect(normalizeGhanaPhone(input)).toBe(expected);
-  });
-
-  test.each([
-    ['a landline (030…)', '0302123456'],
-    ['too short', '024123456'],
-    ['too long', '02412345678'],
-    ['another country', '+447911123456'],
-    ['letters', '024ABC4567'],
-    ['empty', ''],
-    ['not a string', 241234567],
-  ])('refuses %s', (_label, input) => {
-    expect(normalizeGhanaPhone(input)).toBeNull();
-  });
-});
+// Phone numbers: see tests/unit/locale.test.js (normalizePhone, BE4.5).
 
 describe('passwords', () => {
   test('rules: at least 8, at most 128, not on the common list (any case)', () => {

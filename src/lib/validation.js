@@ -5,6 +5,7 @@
 
 const { z } = require('zod');
 const { AppError } = require('./errors');
+const { LANGUAGES, COUNTRIES } = require('../locale');
 
 // Checks `body` against `schema` and returns the clean values, or throws
 // 400 VALIDATION_FAILED with `fields` (field name → message). Extra fields
@@ -34,7 +35,10 @@ const fieldRules = {
     .pipe(z.email('Enter a valid email address.')),
   // A password as typed; its rules are checked by passwords.js.
   password: () => z.string({ error: 'Enter a password.' }).max(1000, 'Use at most 128 characters.'),
-  language: () => z.enum(['en', 'tw'], { error: 'Choose English or Twi.' }),
+  // A language tag from the server's language table (launch: en, tw).
+  language: () => z.enum(Object.keys(LANGUAGES), { error: 'Choose one of the supported languages.' }),
+  // A country code from the server's country table (launch: GH).
+  country: () => z.enum(Object.keys(COUNTRIES), { error: 'Choose a supported country.' }),
 };
 
 module.exports = { parseBody, fieldError, fieldRules };

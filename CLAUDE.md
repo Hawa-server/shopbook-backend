@@ -24,7 +24,8 @@ Shop Book is an offline-first bookkeeping app for market traders: products and s
 ## Rules for the whole project
 
 - **Permanent records:** sales, corrections, repayments, debt write-offs, debts brought forward, stock movements, stock counts, expenses and day closes are never edited or deleted, on the server or the phone. Write no code that could change them. Mistakes are fixed with corrections or reversals. The only deletes allowed are in the server's `deleteBusinessData`: a business its owner closed, after 30 days, and resetting a practice shop.
-- **Money** in whole pesewas, shown as "GH₵ 120.00"; **quantities** in whole units, with half-yard units for yard products (shown as "2.5 yards"). No floating-point money anywhere.
+- **Money** in whole minor units of the business's currency (pesewas for GHS; fields named `…Minor`; decimals from the server's currency table), shown in that currency's format, e.g. "GH₵ 120.00"; **quantities** in whole units, with half-yard units for yard products (shown as "2.5 yards"). No floating-point money anywhere.
+- **International-ready, Ghana first** (Decision F-27, BE4.5): countries, currencies, languages and payment methods come from the server's tables in `src/locale/` (launch: Ghana, GHS, English and Twi, cash and mobile money). Never hard-code Ghana, GHS, `+233` or `Africa/Accra` in code: read them from the business or the tables.
 - **Secrets** only in `.env` files (never committed); keep `.env.example` complete. **Never read or print `.env` or `.env.production` files; ask me if you need a value.**
 - **Hosting** (free plans for testing): Render (API), Aiven (MySQL), Vercel (app), Brevo (email), Sentry (errors). **Deploy early:** I put the server live in BE1 and the app in FE1, myself.
 - **Don't add any library without asking.**
@@ -58,7 +59,7 @@ I'm learning from this code. Start every file with a short comment saying what i
 Node 26 (pinned in `package.json` `engines` and `.nvmrc`), Express 5, MySQL 8 with Sequelize, `mysql2` and `sequelize-cli` migrations (never `sync({ alter })`), Zod (requests and environment variables), argon2 (argon2id), `jsonwebtoken` + `cookie-parser` (JWT in an HTTP-only cookie), `cors`, Node's built-in `crypto` (signatures, hashes, tokens), `@sentry/node`, Jest + Supertest (dev).
 
 - Email through the provider's HTTPS API with `fetch` (**no SMTP, no Nodemailer**).
-- Written in the project, no library: the JSON logger, rate limiter, security headers, Ghana phone-number function, CSV helper.
+- Written in the project, no library: the JSON logger, rate limiter, security headers, phone-number function (E.164, per-country table), money formatter, CSV helper.
 - Local environment with `node --env-file=.env`; reloads with `node --watch`.
 - If `argon2` won't install on the host, ask me before falling back to `bcryptjs`. Don't add any other library without asking.
 
@@ -106,7 +107,7 @@ Node 26 (pinned in `package.json` `engines` and `.nvmrc`), Express 5, MySQL 8 wi
 - **Errors:** always `{ "error": { "code", "message", "fields"? } }`; never leak stack traces, SQL or secrets.
 - **Security:** follow the server plan's Security section and checklist: hashed passwords, sessions (idle 30 days, absolute 90), rate limits, the `X-Requested-With` header and the `Origin` check, CORS only for `CLIENT_URL`, security headers, request IDs.
 - **Never log (or send to Sentry)** passwords, tokens, email links, cookies, bodies, customer phone numbers or email addresses. Sentry uses an allow-list.
-- **Time:** store UTC; business days use `Africa/Accra`; keep both the phone's `recordedAt` and the server's `receivedAt`.
+- **Time:** store UTC; business days use the business's own time zone (`Business.timezone`, `Africa/Accra` in Ghana); keep both the phone's `recordedAt` and the server's `receivedAt`.
 
 ## After each server task
 

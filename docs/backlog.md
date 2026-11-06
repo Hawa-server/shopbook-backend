@@ -17,9 +17,9 @@ The full product backlog for Shop Book, a bookkeeping app for market traders: pr
 
 - Works **fully offline**; the change syncs correctly when the phone reconnects, without duplicates.
 - **Business data is private:** every server query is limited to the signed-in user's business, and role rules are checked **on the server**, not only hidden on screen.
-- **Money is stored in whole pesewas** (never decimals); amounts show as "GH₵ 120.00".
+- **Money is stored in whole minor units of the business's currency** (never decimals); amounts show in that currency's format (for example "GH₵ 120.00", "₦ 5,000.00", "£12.50").
 - Every screen works on a **small Android phone** (360px wide), with buttons at least 48px and text readable outdoors.
-- Every screen and message is available in **English and Twi**.
+- Every screen and message is available in **every supported language (English and Twi at launch)**, with English as the fallback for anything not yet translated.
 - Important actions record **who did it and when**; nothing is silently deleted.
 - Validated on the server with clear error messages; no secrets in logs.
 - **Money and stock stay consistent:** for any story that touches money or stock, the consistency checks (balances, stock, receipts, sequences, operations) report nothing wrong after its tests, and its concurrency cases pass on a real MySQL database.
@@ -60,12 +60,12 @@ Each story below will go through the four planning steps (acceptance criteria, s
 13. **Record a sale quickly.** As a seller, I want to pick the product, size, and quantity in a few taps, so that recording a sale is faster than the notebook.
 14. **Retail or wholesale.** As a seller, I want to choose retail or wholesale for each sale, so that the right price is filled in automatically.
 15. **Price changes need a note.** As a shop owner, I want any sale at a different price from the set retail or wholesale price (after bargaining or a mistake) to require a written note from the seller, so that I know why the price changed.
-16. **How it was paid.** As a seller, I want to mark each sale as cash, mobile money, credit, or part-paid (some now, the rest on credit), so that money and debts are recorded correctly.
+16. **How it was paid.** As a seller, I want to mark each sale as cash, mobile money or another payment method the business uses (MoMo, M-Pesa, card, bank transfer…), credit, or part-paid (some now, the rest on credit), so that money and debts are recorded correctly.
 17. **Confirm before saving.** As a seller, I want to see the item, size, quantity, price, and payment before I confirm a sale, so that I catch mistakes before they're recorded.
 18. **Sales are permanent.** As a shop owner, I want a confirmed sale to be impossible to undo, edit, or delete by anyone, so that the records can always be trusted.
 19. **Correct a mistake with a new record.** As a seller, I want to fix a wrong sale by recording a correction (a return or an exchange, with a reason), so that the stock and money become right while the original sale stays visible.
 20. **Exchange an item.** As a seller, I want to record an exchange (for example, size 40 swapped for size 41, or one product for another), so that the returned item goes back into stock, the new one comes out, and any price difference is recorded as money paid or given back.
-21. **Return an item.** As a seller, I want to record a returned item and how the money was given back (cash, mobile money, or taken off the customer's debt), so that stock, money, and debts stay correct.
+21. **Return an item.** As a seller, I want to record a returned item and how the money was given back (cash, mobile money or another payment method the business uses (MoMo, M-Pesa, card, bank transfer…), or taken off the customer's debt), so that stock, money, and debts stay correct.
 
 ### Epic 4: Customers and debts
 
@@ -117,7 +117,7 @@ Each story below will go through the four planning steps (acceptance criteria, s
 
 ### Epic 9: Language
 
-52. **English or Twi.** As anyone in the shop, I want to use the app in English or Twi, so that everyone on the team understands it.
+52. **English or Twi.** As anyone in the shop, I want to use the app in a supported language, so that everyone on the team understands it.
 
 ### Epic 10: Accounts, privacy and support (added 1 Nov 2026)
 
@@ -206,7 +206,7 @@ No codebase exists yet, so this epic sets up everything the user-facing epics de
 
 - **AC1: Sign up a business.** Given I'm a shop owner, when I enter my name, **phone number, email**, business name, a password, and my language, and accept the privacy notice and terms (AC37), then my business and owner account are created, and I'm signed in. (Changed 1 Nov 2026: email added, Decision F-3.)
 - **AC2: Sign in with phone number or email.** Given I have an account, when I enter my phone number **or** my email, and my password, then I'm signed in; a wrong login or password shows the same message ("Wrong phone number, email or password."), so nobody can find out who has an account.
-- **AC3: Phone numbers and emails.** Given I type a phone number, then it's accepted as a **Ghanaian mobile number** (`0XXXXXXXXX` or `+233XXXXXXXXX`) and saved as `+233…`; an email is trimmed and saved in lower case. Each phone number and each email belongs to only one account. The owner must give an email; staff may add one later (AC31).
+- **AC3: Phone numbers and emails.** Given I type a phone number, then it's accepted in the local format of the chosen country, or in international format, and saved in international (E.164) format, for example `+233…`, `+234…`, `+44…`; an email is trimmed and saved in lower case. Each phone number and each email belongs to only one account. The owner must give an email; staff may add one later (AC31).
 - **AC4: Stay signed in offline.** Given I've signed in once, then I stay signed in for 30 days of use, even with no internet, and each sync extends it.
 - **AC5: Strong enough passwords.** Given I choose a password, then it must have at least 8 characters; it's stored only as a hash.
 - **AC6: Too many attempts.** Given someone tries wrong passwords repeatedly, then sign-in is slowed down (rate limited) for that phone number or email and that connection.
@@ -241,7 +241,7 @@ No codebase exists yet, so this epic sets up everything the user-facing epics de
 ### App lock and language
 
 - **AC25: PIN lock.** Given I've set a 4-digit PIN, then the app asks for it when opened and after 5 minutes in the background; after 5 wrong PINs, I must sign in with my password again (online).
-- **AC26: Two languages.** Given my language is English or Twi, then every screen, button, message, and error is in that language, and I can switch at any time.
+- **AC26: Two languages.** Given my language is a supported language, then every screen, button, message, and error is in that language, and I can switch at any time.
 
 ### Installing and running
 
@@ -323,11 +323,12 @@ No codebase exists yet, so this epic sets up everything the user-facing epics de
 | F-18 | Forgotten passwords? | **A reset link to the confirmed email** (once, 30 minutes). Staff with no email: **the owner resets** to a temporary password. An owner with no access to her email: **the developer resets it with a support tool** after confirming who she is in person or by phone. Every reset signs out the person's other phones. | Nobody is ever locked out for good, at no cost; the owner stays in control of her staff. | SMS codes (cost money); recovery codes on paper (easily lost); no recovery. |
 | F-19 | Must the email be confirmed before using the app? | **No.** The app works straight away; Settings asks to confirm it. Reset links only go to a **confirmed** email. | The app must work offline from the first minute; an unconfirmed email could be someone else's address. | Block the app until confirmed. |
 | F-20 | How are emails sent? | **Through an email provider's HTTPS API** (Brevo free plan, about 300 a day), never SMTP (blocked on free hosting). Only account emails: confirm email, reset password, email changed, business closing. Sent after the database change is saved; if sending fails, the person taps "Send again". | Free, works on free hosting, and proven on Adorn and Agyefam. | SMS (costs money); SMTP (blocked). |
-| F-21 | Privacy? | **A short privacy notice and terms, accepted at sign-up** (version and time recorded). Customers' details are used only for the shop's own records and messages the shop sends itself. Ghana's Data Protection Act applies: the owner can download (F-22) and delete (F-23) her business's records. | The app stores other people's names, phone numbers and debts; owners must know how they're used and stay in control. | No notice. |
+| F-21 | Privacy? | **A short privacy notice and terms, accepted at sign-up** (version and time recorded). Customers' details are used only for the shop's own records and messages the shop sends itself. The data-protection law of the business's country applies (for example Ghana's Data Protection Act); privacy and terms texts may differ by country. The owner can download (F-22) and delete (F-23) her business's records. | The app stores other people's names, phone numbers and debts; owners must know how they're used and stay in control. | No notice. |
 | F-22 | Can the owner take her records out? | **Yes: CSV files** for products and stock, customers and balances, sales, repayments and expenses. Owner only, online. | Her records are hers; CSV opens in Excel and needs no extra library. | PDF (stage 3, for lenders). |
 | F-23 | Closing a business? | **The owner asks in the app** (password plus typing the business name). Staff access ends at once; **all records are deleted 30 days later**, and she can cancel until then. | The owner's right to delete her data, with time to change her mind. The only exception to "permanent records are never deleted", because the whole business asked. | Delete at once (no undo); never delete. |
 | F-24 | Training new staff? | **A practice shop** for every business, with sample products and customers, a "PRACTICE" bar on every screen, and a reset by the owner. | Sales can never be deleted, so training in the real shop would leave fake sales in the records forever. | Train on paper; a "training flag" on real records (mixes fake and real). |
 | F-26 | How does the server know which phone is really talking? (added 1 Nov 2026) | **Each phone makes its own signing key** when it registers (kept on the phone and impossible to copy out), and signs every request. **Registering a phone needs the person's password** and proof that the phone holds its key, so a copied sign-in cookie can't add a new phone; the owner is told by email whenever a phone is added; the server checks the signature, the time (using the server's clock, so wrong phone clocks still work) and a one-time number. | A phone's ID is just a label: anyone with a copied sign-in cookie could claim it. The key means a copied cookie is useless on another machine. It doesn't protect against harmful code inside the app itself, so the app also blocks outside scripts. | Trust the device ID (easy to fake); signing without clock correction (would fail on phones with the wrong time). |
+| F-27 | Which countries and languages? (added 7 Nov 2026) | **Any business in a supported country**, with its own currency (whole minor units, fixed once money is recorded), time zone, phone format and payment methods, and screens in every supported language (English fallback). Launch: Ghana; English and Twi. Other countries only once their legal texts, payment methods and translations are ready. | Shops outside Ghana asked to use it; designing it in now avoids migrating money data later. | Ghana only. |
 | F-25 | Help and support? | **Help → Report a problem** opens WhatsApp to the developer with technical details only (app version, device code, waiting records, last error reference). Server errors go to error monitoring (Sentry free) without personal data. **Support tools** run from the developer's laptop, never as routes in the app, and every change they make is logged. | Shops in the market will say "it's not working"; the developer needs details without seeing their records. Keeping support tools off the internet means they can't be attacked. | An in-app admin area (a target for attackers); no support channel. |
 
 ## Step 4: Developer review

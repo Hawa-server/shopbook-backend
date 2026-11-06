@@ -64,7 +64,7 @@ A person can belong to two businesses: the real one and its practice shop (backl
 | `stockCounts` | Physical counts (counted number, the number the phone showed, the phone's cursor then) |
 | `stockLevels` | Quantity on hand per product and size, updated in the same transaction as every movement or count and rebuilt after each pull with the count rule (so lists open fast) |
 | `priceVersions` | The version number of each product and size the phone holds, so every sale line can name it (`productVersion`, `sizeVersion`, or `editOpId` for an edit not yet sent) |
-| `customers` | Customers, with the server's `balancePesewas` |
+| `customers` | Customers, with the server's `balanceMinor` |
 | `sales`, `saleItems`, `salePayments` | Sales |
 | `corrections`, `correctionItems` | Returns and exchanges |
 | `repayments` | Debt repayments |
@@ -96,7 +96,7 @@ Records that came from the server carry `serverSeq`; records made on this phone 
 
 ### Sale invariants (checked before saving, and again on the server)
 
-- each line: `lineTotal = quantity × agreedPrice` (with half yards, `quantityUnits × agreedPrice ÷ unitScale`, a whole number of pesewas)
+- each line: `lineTotal = quantity × agreedPrice` (with half yards, `quantityUnits × agreedPrice ÷ unitScale`, a whole number of minor units)
 - `subtotal = sum of line totals`, `paid = sum of payments`, `credit = subtotal − paid`
 - `paid ≤ subtotal`, `credit ≥ 0`; credit needs a customer
 - a changed price needs a note
@@ -163,7 +163,7 @@ Each rejected record is shown with what it was ("Sale K7M-0042, GH₵ 120.00"), 
 - The session is an HTTP-only cookie from the server (idle 30 days, absolute 90 days). The app never sees the token.
 - The app **works offline without the session**: the session is only needed to sync. When it expires, selling continues, and the user is asked to sign in when there's data.
 - **PIN lock:** a 4-digit PIN, stored only on the phone as a PBKDF2 hash (Web Crypto, random salt, at least 100,000 iterations). Asked on opening and after **5 minutes** in the background. **5 wrong PINs** → the app locks until a full online sign-in. A PIN is set per person on that phone and never sent to the server.
-- **Sign up:** name, phone number, **email**, business name, password (shown rules: at least 8 characters), language, and a required tick "I accept the privacy notice and terms" with links that open both (from `GET /legal/current`, in the chosen language).
+- **Sign up:** country (from `GET /api/reference`; only Ghana at launch, so it can be preselected and hidden), name, phone number, **email**, business name, password (shown rules: at least 8 characters), language, and a required tick "I accept the privacy notice and terms" with links that open both (from `GET /legal/current`, in the chosen language).
 - **Sign in:** one field, **"Phone number or email"**, plus password. Errors say "Wrong phone number, email or password." Below the button: **Forgot password?**
 - **Forgot password:** enter phone number or email → "If that account has a confirmed email, we've sent a link. Check your inbox and spam." Also: "No email? Ask your shop owner to reset your password." The emailed link opens `/reset-password?token=…` in the app: new password twice → "Password changed. Sign in again." The token is taken from the address and removed from it straight away (`history.replaceState`), never stored or logged.
 - **Confirm email:** the link opens `/confirm-email?token=…` → "Email confirmed". Until then, Settings shows "Email not confirmed" with **Send the link again** (not a blocking screen: the app works offline from the first minute).
@@ -198,9 +198,10 @@ Requests go to `/api` on the app's own address. Locally the Vite proxy forwards 
 ## Calculations on the phone
 
 - **Stock on hand** uses the server's count rule (server plan, Calculated): the latest count's number plus the movements recorded after it (by `recordedAt`, then `id`), or all movements if never counted; kept ready in `stockLevels`. A count saves **what was counted** (and the stock the phone showed), never a difference; the difference shown is worked out. A size is **Low** at or below its product's level (or the business's, default 3), **Out of stock** at 0, and **Below zero** under 0.
-- **Customer balances** come from the server's `balancePesewas` (associates don't hold everyone's sales). After a local sale or repayment not yet sent, show the server balance adjusted by this phone's unsent records, labelled "Updating…".
+- **Customer balances** come from the server's `balanceMinor` (associates don't hold everyone's sales). After a local sale or repayment not yet sent, show the server balance adjusted by this phone's unsent records, labelled "Updating…".
 - **Totals** on the phone are for display and checking; the server recalculates everything.
-- **Money** is whole pesewas; one shared helper formats it as "GH₵ 120.00" and one parser turns typed amounts into pesewas **by reading the digits** ("120.5" → 12050), never by multiplying a decimal.
+- **Money** is whole **minor units** of the business's currency (pesewas for GHS; fields end in `Minor`). One shared helper, **written in the app (not `Intl.NumberFormat`, which differs between phones)**, formats it from the business's `currency` in `GET /api/auth/me` (symbol, a non-breaking space, grouping and `minorUnits` decimals, integers only), so it's exactly "GH₵ 120.00" on every phone; one parser turns typed amounts into minor units **by reading the digits** ("120.5" → 12050 for 2 decimals), never by multiplying a decimal.
+- **Locale facts per business** (BE4.5): country, currency, time zone, default language and payment methods come from `me.businesses[]`; the names of countries, languages and payment methods ("MoMo" for mobile money in Ghana) from `GET /api/reference`. Business dates use the business's time zone; phone numbers are shown from E.164 in the country's local form and WhatsApp links use E.164 without the `+`.
 - **Half yards:** stored in half-yard units for yard products and shown as "2.5 yards".
 
 ---
@@ -268,8 +269,8 @@ A design canvas (Sell, Customers, Stock, Today) will be prepared before FE5; unt
 ## Languages
 
 - Every piece of the app's own text comes from the dictionary via `t('key')`. No text is typed directly into components.
-- **English and Twi** dictionaries must have the same keys; `npm run check:i18n` fails if any key is missing.
-- Customer messages (statements, receipts, reminders) have templates in both languages, chosen by the **customer's** language.
+- **Every supported language** (English and Twi at launch, from `GET /api/reference`) has a dictionary; `npm run check:i18n` fails if a `complete` language misses a key of English; a `draft` language may miss keys, and English is shown for those.
+- Customer messages (statements, receipts, reminders) have templates in every supported language, chosen by the **customer's** language, falling back to English.
 - Product names, customer names and notes stay exactly as typed.
 
 ---
