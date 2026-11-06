@@ -35,6 +35,7 @@ async function buildBusiness(label) {
   const invited = await add(`Invited ${label}`, invitee.body.phone);
   const removed = await add(`Removed ${label}`, signupBody().phone);
   await agent.delete(`/api/team/${removed.body.member.membershipId}`).set(biz(businessId));
+  const ownerDevice = await agent.registerIn(businessId);
 
   return {
     label, agent, businessId, ownerId: res.body.user.id, ownerPhone: body.phone, ownerPassword: body.password,
@@ -42,6 +43,7 @@ async function buildBusiness(label) {
     invitedId: invited.body.member.membershipId, invitee,
     removedId: removed.body.member.membershipId,
     memberIds: [staff.body.member.membershipId, invited.body.member.membershipId, removed.body.member.membershipId],
+    deviceId: ownerDevice.deviceId, deviceCode: ownerDevice.deviceCode,
   };
 }
 
@@ -60,8 +62,8 @@ async function call(agent, method, url, headers, body) {
 }
 
 // Expects B's ID used from A to be answered EXACTLY like an unknown ID.
-async function expectSameAsUnknown(method, urlFor, body) {
-  const withB = await call(A.agent, method, urlFor(B.staffId), biz(A.businessId), body);
+async function expectSameAsUnknown(method, urlFor, body, bId = B.staffId) {
+  const withB = await call(A.agent, method, urlFor(bId), biz(A.businessId), body);
   const withRandom = await call(A.agent, method, urlFor(RANDOM_ID), biz(A.businessId), body);
   expect(withB).toEqual({ status: 404, body: { error: { code: 'NOT_FOUND', message: 'Not found' } } });
   expect(withB).toEqual(withRandom);
@@ -70,6 +72,27 @@ async function expectSameAsUnknown(method, urlFor, body) {
 // One case per business route: what A tries against B, and the proof that
 // nothing of B's changed.
 const CASES = {
+  'POST /api/devices/challenge': async () => {
+    const before = await db.getModels().DeviceChallenge.count({ where: { businessId: B.businessId } });
+    expect((await call(A.agent, 'POST', '/api/devices/challenge', biz(B.businessId))).status).toBe(404);
+    expect(await db.getModels().DeviceChallenge.count({ where: { businessId: B.businessId } })).toBe(before);
+  },
+  'POST /api/devices': async () => {
+    const before = await db.getModels().Device.count({ where: { businessId: B.businessId } });
+    const res = await call(A.agent, 'POST', '/api/devices', biz(B.businessId), { deviceId: randomUUID(), name: 'Sneaky' });
+    expect(res.status).toBe(404);
+    expect(await db.getModels().Device.count({ where: { businessId: B.businessId } })).toBe(before);
+  },
+  'GET /api/devices': async () => {
+    const own = await A.agent.get('/api/devices').set(biz(A.businessId));
+    expect(own.status).toBe(200);
+    const text = JSON.stringify(own.body);
+    for (const leak of [B.deviceId, B.ownerId, `"${B.deviceCode}"`]) expect(text).not.toContain(leak);
+  },
+  'DELETE /api/devices/:deviceId': async () => {
+    await expectSameAsUnknown('DELETE', (id) => `/api/devices/${id}`, undefined, B.deviceId);
+    expect((await db.getModels().Device.findByPk(B.deviceId)).isActive).toBe(true);
+  },
   'PATCH /api/business/locale': async () => {
     const before = await db.getModels().Business.findByPk(B.businessId);
     const res = await call(A.agent, 'PATCH', '/api/business/locale', biz(B.businessId), { timezone: 'Africa/Accra' });
@@ -119,7 +142,7 @@ describe("A's people against B's records", () => {
 
   test("X-Business set to B gives the same 404 as a random business, on every business route", async () => {
     for (const route of routes.filter((r) => r.business)) {
-      const url = route.path.replace(':membershipId', B.staffId); // no other path parameters yet
+      const url = route.path.replace(':membershipId', B.staffId).replace(':deviceId', B.deviceId);
       const body = route.method === 'GET' || route.method === 'DELETE' ? undefined : { name: 'X', phone: '0201112233', role: 'manager' };
       const withB = await call(A.agent, route.method, url, biz(B.businessId), body);
       const withRandom = await call(A.agent, route.method, url, biz(randomUUID()), body);
@@ -131,6 +154,7 @@ describe("A's people against B's records", () => {
   test("B's staff member can't reach A either", async () => {
     const { agent } = await signInAgent(ctx.app, ctx.config, B.staffPhone, B.staffTemp);
     await agent.post('/api/auth/change-password').set(XHR).send({ currentPassword: B.staffTemp, newPassword: 'staff-b-pass-2026' });
+    agent.setPassword('staff-b-pass-2026');
     await agent.post('/api/auth/accept-terms').set(XHR).send({ version: '1' });
     expect((await agent.get('/api/team').set(biz(A.businessId))).status).toBe(404);
     B.staffTemp = 'staff-b-pass-2026';

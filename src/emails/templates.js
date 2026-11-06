@@ -33,6 +33,15 @@ const templates = {
     }),
   },
 
+  // Sent to the OWNER whenever a phone is registered in their business, so a
+  // phone added with a stolen password doesn't go unnoticed.
+  device_added: {
+    en: ({ name, deviceName, personName, businessName }) => ({
+      subject: `A new phone was added to ${businessName}`,
+      text: `Hello ${name},\n\nA new phone, "${deviceName}", was added to ${businessName} by ${personName}.\n\nIf you don't recognise it, open Shop Book, go to More → Phones, and remove it. Then ask ${personName} to change their password.`,
+    }),
+  },
+
   // Sent by "Forgot password" to a confirmed email.
   reset_password: {
     en: ({ name, link }) => ({

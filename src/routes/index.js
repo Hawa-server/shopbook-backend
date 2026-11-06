@@ -7,19 +7,23 @@ const { healthHandler } = require('./health');
 const { authRoutes } = require('./auth');
 const { teamRoutes } = require('./team');
 const { businessRoutes } = require('./business');
+const { deviceRoutes } = require('./devices');
 
 // Each entry: the HTTP method, the full path (with /api), `business` (true if
 // it works inside one business: it then needs X-Business and requireAuth, and
 // must have a case in the isolation test; false otherwise; a test fails if
-// it's missing), and `build`, which
+// it's missing), `signed` (true if the phone must sign it with its device key:
+// every business endpoint except the two device-registration ones), and
+// `build`, which
 // receives the app's dependencies and returns the route's middleware and
 // handler in order. Paths use Express syntax (`/api/team/:membershipId`), and
 // docs/api.md uses the same text in its `### METHOD /path` headings.
 const routes = [
-  { method: 'GET', path: '/api/health', business: false, build: (deps) => [healthHandler(deps)] },
+  { method: 'GET', path: '/api/health', business: false, signed: false, build: (deps) => [healthHandler(deps)] },
   ...authRoutes,
   ...teamRoutes,
   ...businessRoutes,
+  ...deviceRoutes,
 ];
 
 module.exports = { routes };

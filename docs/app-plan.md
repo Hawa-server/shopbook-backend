@@ -107,6 +107,83 @@ Records that came from the server carry `serverSeq`; records made on this phone 
 - The counter only goes up; numbers are never reused, even if the operation is later rejected.
 - If the phone is wiped or the app reinstalled, it registers as a **new device** with a new code, so old numbers can't repeat.
 
+## Folder structure
+
+Code is grouped by **feature** (what the trader does), with the shared engine (database, sync, signing, API) kept separate. Each feature folder holds its screens, its small components, and the functions that write its records and outbox operations. Tests sit next to the file they test (`money.test.js` beside `money.js`).
+
+```
+STOREBOK_FRONTEND/
+├── CLAUDE.md
+├── docs/                        backlog, both plans, api.md (copy), guide.md
+├── public/
+│   ├── icons/                   192, 512, maskable-512, apple-touch
+│   └── robots.txt
+├── src/
+│   ├── main.jsx                 starts React, the router and the service worker
+│   ├── App.jsx                  routes, the app shell and the bottom tabs
+│   ├── index.css                Tailwind and the design values as CSS variables
+│   │
+│   ├── api/                     the ONLY place that talks to the server
+│   │   ├── client.js            fetch helper: /api, cookies, X-Business, signing, X-Server-Time
+│   │   ├── errors.js            each api.md error code → what the app does
+│   │   └── health.js            wake the sleeping server, "Connecting…"
+│   ├── db/                      local storage (Dexie)
+│   │   ├── appDb.js             shopbook-app: signed-in user, open business, language, PIN
+│   │   ├── businessDb.js        shopbook-<businessId>: records, outbox, cursor, device key, receipt counter
+│   │   └── wipe.js              remove one business's database (ACCESS_REMOVED, DEVICE_REVOKED)
+│   ├── sync/                    the sync engine
+│   │   ├── outbox.js            save a record and its operation in one transaction
+│   │   ├── push.js              send operations, handle saved / duplicate / rejected
+│   │   ├── pull.js              apply each page and its cursor in one transaction
+│   │   ├── scheduler.js         when to sync: on open, online, after saving, every few minutes
+│   │   └── status.js            "All sent", "2 not sent", "Needs attention"
+│   ├── crypto/
+│   │   ├── deviceKey.js         ECDSA P-256 key (non-extractable), register the phone
+│   │   ├── sign.js              build the signed text and sign each request
+│   │   └── pin.js               PBKDF2 PIN hash and check
+│   ├── lib/                     small pure helpers, no React
+│   │   ├── money.js             minor units ↔ "GH₵ 120.00" from the business's currency rules, no floating point
+│   │   ├── quantity.js          whole units and half yards ("2.5 yards")
+│   │   ├── phone.js             E.164 ↔ the country's local form ("024 123 4567")
+│   │   ├── dates.js             business days in the business's time zone, "3 weeks ago"
+│   │   ├── ids.js               UUIDs and opIds
+│   │   └── receiptNumber.js     the phone's receipt numbers (format from api.md)
+│   ├── i18n/
+│   │   ├── en.js  tw.js         one dictionary per language (English and Twi at launch)
+│   │   └── t.js                 the t() helper
+│   ├── auth/                    useSession, RequireRole, the PIN lock
+│   ├── components/              shared UI: Button, Field, MoneyText, StatusChip,
+│   │                            BottomTabs, Header, Sheet, ConfirmDialog, EmptyState
+│   ├── features/                one folder per part of the app
+│   │   ├── onboarding/          sign up, sign in, forgot password, terms, PIN
+│   │   ├── sell/                Sell, review, Sale saved / receipt, send on WhatsApp
+│   │   ├── corrections/         returns, exchanges, reversals
+│   │   ├── products/            products, sizes, prices
+│   │   ├── stock/               stock in, counts, stock list
+│   │   ├── customers/           customer list, customer page, repayments, reminders
+│   │   ├── expenses/
+│   │   ├── today/               owner Today, staff My day, close the day
+│   │   ├── team/                team and phones (owner)
+│   │   ├── settings/            business settings, my language
+│   │   ├── needsAttention/      rejected operations to fix
+│   │   ├── account/             download records, close the business, Help
+│   │   └── practice/            the practice shop switch
+│   └── test/                    test setup, fake IndexedDB, two-phone helpers (FE3.5)
+├── scripts/
+│   └── check-i18n.js            npm run check:i18n
+├── index.html
+├── vite.config.js               React, Tailwind and vite-plugin-pwa
+├── vercel.json                  /api rewrite to Render and the security headers (CSP)
+├── package.json  .nvmrc  .env.example
+└── .gitignore
+```
+
+**Rules for the structure:**
+- **Screens never call `fetch` or Dexie directly.** They read with `useLiveQuery` through their feature's functions, and save through `sync/outbox.js`; only `api/` talks to the server.
+- **`lib/` has no React and no Dexie**, so it is easy to test (money and quantities especially).
+- **A new feature gets a new folder in `features/`**, not new files scattered elsewhere; shared pieces move to `components/` only once two features use them.
+- FE1 creates the folders it needs; later tasks add their own feature folder.
+
 ---
 
 ## Sync engine (`src/sync/`)
@@ -250,11 +327,11 @@ Screens follow these rules, but **the server enforces them**; the phone never ho
 - **Large numbers:** money and quantities are the biggest text on their screen.
 - **Few words, clear icons with labels:** every icon has a text label (in the chosen language).
 - **Colours with words:** "Owes", "Paid", "Low stock", "Not sent yet" and "Needs attention" always use a word or icon, never colour alone.
-- **Fonts:** one clear sans-serif (a system font stack) at a minimum of 16px.
+- **Fonts:** one clear sans-serif (a system font stack): 16px for anything read to act (titles, prices, amounts, buttons, inputs, messages); 14px allowed only for secondary lines; 13px only for bottom tab labels under their icon (see `design.md`).
 - **Bottom navigation:** **Sell**, **Customers**, **Stock**, **Today**, **More**.
 - **Designed for 360px-wide phones first;** larger screens centre the content.
 
-A design canvas (Sell, Customers, Stock, Today) will be prepared before FE5; until then, follow this guide.
+**`docs/design.md`** (frontend project) has the exact colours, type sizes, components, screens and logo, and the design canvas shows them. Build from `design.md`; if it and this guide disagree, stop and ask.
 
 ### Accessibility
 

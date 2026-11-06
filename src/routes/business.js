@@ -11,6 +11,7 @@ const locale = require('../locale');
 const { parseBody, fieldRules } = require('../lib/validation');
 const { requireSession } = require('../lib/session');
 const { requireAuth, requireRole } = require('../middleware/requireAuth');
+const { requireDevice } = require('../middleware/requireDevice');
 const { updateLocale } = require('../services/business');
 
 // GET /api/reference: the reference tables, the same for everyone.
@@ -45,8 +46,8 @@ function changeLocale(deps) {
 }
 
 const businessRoutes = [
-  { method: 'GET', path: '/api/reference', business: false, build: () => [reference()] },
-  { method: 'PATCH', path: '/api/business/locale', business: true, build: (d) => [requireSession(d), requireAuth(d), requireRole('owner'), changeLocale(d)] },
+  { method: 'GET', path: '/api/reference', business: false, signed: false, build: () => [reference()] },
+  { method: 'PATCH', path: '/api/business/locale', business: true, signed: true, build: (d) => [requireSession(d), requireAuth(d), requireDevice(d), requireRole('owner'), changeLocale(d)] },
 ];
 
 module.exports = { businessRoutes };

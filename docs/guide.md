@@ -310,3 +310,147 @@ Each business lists the methods it uses (`paymentMethods`: cash and mobile money
 ### The migration
 
 `migrations/20261107100000-international.js` turned the existing data international without changing its meaning: every existing business became Ghana, GHS and Africa/Accra with cash and mobile money; languages became open tags (values kept); the phone rule became E.164 (existing `+233…` numbers already fit); `defaultCreditLimitPesewas` became `defaultCreditLimitMinor`.
+
+---
+
+# The phone app
+
+Explanations for studying the app (the frontend project), written as each FE task is built.
+
+---
+
+## FE1: setup and app shell
+
+### What the pieces are
+
+- **Vite** builds the app: it turns the React files in `src/` into a few small files in `dist/` that phones download. `npm run dev` runs it on your computer with instant reloads.
+- **React** draws the screens; **React Router** decides which screen an address shows (`/sell`, `/customers`, `/stock`, `/today`, `/more`).
+- **Tailwind** styles them with short class names (`bg-primary`, `text-title`). The colours and sizes from `docs/design.md` are defined **once** in `src/index.css` as CSS variables, so no component contains a colour code, and a design change is made in one place.
+- **Dexie** is a friendly layer over the phone's built-in database (IndexedDB). FE1 only declares the tables; later tasks fill them.
+
+### Why the app works with no network
+
+The app is a **PWA** (installable web app). `vite-plugin-pwa` writes a **service worker**: a small script the browser keeps that saves the app's own files the first time it opens. After that the app opens from those saved files, even in airplane mode. It **never** saves answers from `/api`: those must always come fresh from the server.
+
+When a new version is published, the service worker downloads it quietly and the app says **"A new version is ready"** with **Update now** and **Later**. It never reloads by itself, and refuses while something is being entered (`src/lib/unsavedInput.js`), so an update can't wipe out a sale halfway through.
+
+### One door to the server
+
+Every request goes through `src/api/client.js`. It always calls `/api/...` on the app's **own** address, never the server's. Locally, Vite's proxy passes `/api` on to your backend; in production, `vercel.json` passes it to Render. Because the browser thinks it's talking to one site, the session cookie works simply, and the security policy can say "talk only to yourself" (`connect-src 'self'`).
+
+The helper never throws for a network or server problem; it returns a result, and `src/api/errors.js` decides what that means, straight from the table in `api.md`. The most important rule there: **no answer, a timeout, or a 5xx is always temporary.** Treating one of those as "rejected" could lose a trader's record; retrying never can.
+
+### The sleeping server
+
+The free server sleeps when unused and can take up to a minute to wake. So when the app opens, it calls `/api/health` in the background (`src/api/health.js`): that wakes the server, and the header shows **"Connecting…"** meanwhile. Requests wait up to 60 seconds. Nothing on the phone waits for it.
+
+### Money without floating point
+
+Computers store numbers like 0.29 inexactly: `0.29 * 100` gives `28.999999999999996`. For money that's unacceptable, so the app never does that. Amounts are whole **minor units** (pesewas for the cedi), and `src/lib/money.js` reads typed amounts **by their digits**: "120.5" becomes the digits "120" and "50", joined into 12050. Formatting goes the other way, also with digits. The tests (`money.test.js`) include the classic traps (0.29, 1.15, 4.35). Quantities work the same way: yards are stored as **half-yard units** (5 = "2.5 yards").
+
+Amounts are shown with a **non-breaking space** after the symbol, so "GH₵ 1,000.00" can never be split over two lines.
+
+### Languages: one list of words per language
+
+All the app's words are in `src/i18n/en.js` and `src/i18n/tw.js`, under the same keys. Screens ask for `t('nav.sell')`, never type words themselves. The chosen language is saved in the phone's `shopbook-app` database, so switching it changes every screen at once and survives closing the app. `npm run check:i18n` checks the dictionaries against each other, including that `{placeholders}` match (a Twi line missing `{n}` would drop a number from the screen).
+
+The app's own name (**Ledga**) is in exactly one place, `app.name`; the install name and the page title read it at build time.
+
+### Security headers (`vercel.json`)
+
+- **Content-Security-Policy:** the browser may run scripts only from the app itself, and talk only to the app's own address. If someone ever slipped code into a page, it couldn't run or send data elsewhere. From FE3 this protects the phone's signing key.
+- **Referrer-Policy: no-referrer:** password-reset links carry a token in the address; this stops the address being sent to any other site.
+- **X-Frame-Options / frame-ancestors:** no other site can show the app inside a frame (to trick someone into tapping).
+- **HSTS:** phones always use HTTPS for the app.
+
+### The icons
+
+The logo SVGs in `public/icons/` are turned into the PNG sizes Android needs by `npm run icons`, which uses Chrome on your computer. The **maskable** icon is a full green square with the drawing in the middle 70%, so Android's round mask never cuts it.
+
+### Twi to check
+
+Every Twi line in `src/i18n/tw.js` is a **draft written by Claude Code** and needs a Twi speaker's review before real traders use it (FE12). For FE1 that is **every key** in the file:
+
+| Key | English | Draft Twi |
+|---|---|---|
+| `nav.main` | Main menu | Nhyehyɛe titiriw |
+| `nav.sell` / `sell.title` | Sell | Tɔn |
+| `nav.customers` / `customers.title` | Customers | Adetɔfoɔ |
+| `nav.stock` / `stock.title` | Stock | Nneɛma |
+| `nav.today` / `today.title` | Today | Ɛnnɛ |
+| `nav.more` / `more.title` | More | Nkaeɛ |
+| `common.back` | Back | San kɔ akyi |
+| `sell.empty` | No products to sell yet. | Nneɛma biara nni hɔ a wobɛtɔn seesei. |
+| `customers.empty` | No customers yet. | Adetɔfoɔ biara nni hɔ seesei. |
+| `stock.empty` | No products in stock yet. | Nneɛma biara nni sotɔɔ no mu seesei. |
+| `today.empty` | No sales today yet. | Wonntɔnee hwee ɛnnɛ seesei. |
+| `language.title` | Language | Kasa |
+| `language.en` | English | Borɔfo |
+| `about.title` | App and server | App ne server |
+| `about.appVersion` | App version | App no version |
+| `about.serverVersion` | Server version | Server no version |
+| `about.checkAgain` | Check again | Hwɛ bio |
+| `server.connecting` / `sync.connecting` | Connecting… | Ɛrekɔ so ahyɛ ase… |
+| `server.ok` | Working | Ɛreyɛ adwuma |
+| `server.down` | Not working right now. Your records are safe on this phone. | Ɛnyɛ adwuma seesei. Wo nkrataa wɔ fon yi so dwoodwoo. |
+| `server.unreachable` | Can't reach it right now. Your records are safe on this phone. | Yɛntumi nnu hɔ seesei. Wo nkrataa wɔ fon yi so dwoodwoo. |
+| `server.offline` | No internet. Your records are safe on this phone. | Intanɛt nni hɔ. Wo nkrataa wɔ fon yi so dwoodwoo. |
+| `sync.sending` | Sending… | Ɛremena… |
+| `sync.notSentYet` | Not sent yet | Wɔmmɛmanee |
+| `sync.notSentCount` | {n} not sent | {n} wɔmmɛmanee |
+| `sync.allSent` | All sent | Wɔde ne nyinaa akɔ |
+| `sync.needsAttention` | Needs attention | Ɛhia sɛ wohwɛ |
+| `update.ready` | A new version is ready. | Version foforɔ wɔ hɔ. |
+| `update.now` | Update now | Fa foforɔ no seesei |
+| `update.later` | Later | Akyiri yi |
+| `update.finishFirst` | Finish what you are entering first. The update will wait. | Wie deɛ wo kyerɛw no kane. Foforɔ no bɛtwɛn. |
+| `update.offlineReady` | Ready to work without internet. | Ɛbɛtumi ayɛ adwuma a intanɛt nni hɔ. |
+
+The words most likely to need a better choice: "Stock" (Nneɛma just means "things"), "More", "Connecting…", "Not sent yet", and whether traders would rather see English words like "server" and "version".
+
+**Length matters too.** On a 360px phone with large text, tab labels have about 70px each: "Adetɔfoɔ" and "Nneɛma" then break mid-word onto a second line, and "Ɛrekɔ so ahyɛ ase…" wraps to four lines in the header. Nothing overlaps, but shorter words (one short word per tab, two or three for "Connecting…") will read better.
+
+---
+
+## BE5 Part A: phones and signed requests
+
+### Why a phone needs its own key
+
+A sign-in cookie proves "someone signed in as Ama". If it were ever copied off a phone, whoever has it could act as Ama from anywhere. So each phone also gets its **own key pair**, made on the phone by the browser (Web Crypto). The **private key can't be read out**, not even by the app's own code; it can only be asked to sign. The server keeps the **public key**, which can only check signatures.
+
+Every business request is then **signed** (`src/lib/deviceSigning.js`). A copied cookie on another machine is useless: it has no key to sign with. A device ID on its own proves nothing either; only a valid signature does.
+
+**Honest limit:** if malicious script ever ran *inside* the app, it could ask the browser to sign. The app's strict Content-Security-Policy (no outside scripts) is what prevents that.
+
+### Registering a phone (enrolment)
+
+This is the one moment a stolen cookie could be turned into a "trusted" phone, so it needs more than a sign-in:
+
+1. **A challenge:** `POST /api/devices/challenge` gives 32 random bytes, valid 5 minutes, usable once (only their hash is stored, in `DeviceChallenge`).
+2. **Proof of the key:** the phone signs the challenge with its new private key.
+3. **The password:** `POST /api/devices` sends the public key, the signed challenge and the person's **current password**. The server checks all of it, then gives the phone its **device code** (3 characters such as `K7M`, from 29 letters and digits that can't be confused). Codes are never reused, not even after a phone is revoked, so receipt numbers like `K7M-0042` can never repeat.
+4. The owner gets an email: "A new phone was added".
+
+A device ID that already exists is refused (`DEVICE_ID_TAKEN`): a phone never swaps its key. A new key means a new device.
+
+### What the server checks on every signed request (`requireDevice`)
+
+The order is session → business (`requireAuth`) → **device** → role → handler:
+
+1. **The device** must be this person's, in this business, and active. Anything else gets the same answer, `DEVICE_NOT_REGISTERED`, so nobody can probe someone else's phones.
+2. **Not locked:** after 20 failed signatures in 15 minutes the phone is blocked for 15 minutes, and the owner sees it. Failures count **only** once the device is confirmed to be the person's own, so one member can't lock out another member's phone.
+3. **The time** (`X-Signed-At`) must be within 5 minutes of the server's clock. Phones with a wrong clock still work: every answer carries `X-Server-Time`, and the phone signs with its clock **corrected** by the difference.
+4. **The signature** covers the method, the exact path and query, the SHA-256 of the exact body bytes, the device, the business, the time and a nonce. Changing any of them after signing breaks it.
+5. **The nonce** (16 random bytes) is saved in `DeviceRequestNonce` in its own short transaction, **before** the request's work. A unique key means two copies of the same request can't both pass, even at the same instant (`NONCE_REUSED`). Expired nonces of that phone are deleted on the same request: the one allowed "housekeeping" delete.
+
+### Revoking a phone
+
+The owner can revoke a lost or stolen phone (`DELETE /api/devices/:deviceId`). Its next request gets `DEVICE_REVOKED`, and the app wipes that business's data. Removing a member from the team revokes all their phones for that business in the same transaction.
+
+### Trying signed endpoints yourself: `npm run dev:sign`
+
+Postman can't sign with a key by itself, so `scripts/dev-sign.js` does it with a **throwaway test key** (kept in `.dev-device-key.json`, Git-ignored; the script refuses to run with `NODE_ENV=production`):
+
+1. `npm run dev:sign -- new-key`
+2. In Postman: `POST /api/devices/challenge` (signed in, `X-Business`), then `npm run dev:sign -- register-body --challenge <challenge>`. Paste the JSON into `POST /api/devices`, typing your password where it says so.
+3. For each signed request: `npm run dev:sign -- headers --method GET --path /api/team --business <id>`, and copy the four headers into Postman. Each set works once and for 5 minutes.

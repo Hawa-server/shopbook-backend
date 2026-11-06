@@ -8,6 +8,9 @@ node_modules/
 .env.*
 !.env.example
 
+# The dev-sign script's throwaway test key (scripts/dev-sign.js)
+.dev-device-key.json
+
 # Certificates and keys (the database CA certificate lives outside the project anyway)
 *.pem
 *.crt

@@ -13,10 +13,11 @@ const { createLogger } = require('../../src/lib/logger');
 const { createAuthLimiters } = require('../../src/routes/limiters');
 const { createEmailSender } = require('../../src/lib/email');
 const db = require('../../src/db');
+const { testPhone } = require('./testPhone');
 const { TERMS_VERSION } = require('../../src/legal');
 
 // Every table, children first. Updated as migrations add tables.
-const TABLES = ['ChangeLog', 'EmailToken', 'Membership', 'Location', 'BusinessSettings', 'Business', 'User'];
+const TABLES = ['DeviceRequestNonce', 'DeviceChallenge', 'Device', 'ChangeLog', 'EmailToken', 'Membership', 'Location', 'BusinessSettings', 'Business', 'User'];
 
 // Empties every table in the test database.
 async function resetDatabase() {
@@ -73,21 +74,22 @@ function signupBody(overrides = {}) {
   };
 }
 
-// Signs up an owner with a supertest agent (which keeps cookies like a
-// phone's browser). Returns the agent, the body used and the response.
+// Signs up an owner on a new test phone (a supertest agent that keeps the
+// cookie like a browser, and signs business requests with its own device
+// key, using the app's clock). Returns the phone, the body used and the response.
 async function signUpOwner(app, config, overrides = {}) {
-  const agent = request.agent(app);
+  const raw = request.agent(app);
   const body = signupBody(overrides);
-  const res = await agent.post('/api/auth/signup').set(appHeaders(config)).send(body);
+  const res = await raw.post('/api/auth/signup').set(appHeaders(config)).send(body);
   if (res.status !== 201) throw new Error(`sign-up failed: ${res.status} ${JSON.stringify(res.body)}`);
-  return { agent, body, res };
+  return { agent: testPhone(raw, { password: body.password, now: app.locals.deps.now }), body, res };
 }
 
-// Signs in on a NEW agent (another phone) with a login and password.
+// Signs in on a NEW test phone with a login and password.
 async function signInAgent(app, config, login, password) {
-  const agent = request.agent(app);
-  const res = await agent.post('/api/auth/signin').set(appHeaders(config)).send({ login, password });
-  return { agent, res };
+  const raw = request.agent(app);
+  const res = await raw.post('/api/auth/signin').set(appHeaders(config)).send({ login, password });
+  return { agent: testPhone(raw, { password, now: app.locals.deps.now }), res };
 }
 
 // The token from the newest email of a template sent to `to`.

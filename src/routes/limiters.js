@@ -32,6 +32,12 @@ function createAuthLimiters({ now, unlimited = false } = {}) {
     // The owner resetting a staff member's password: 10 per hour per owner, 20 per IP.
     teamResetByOwner: make('team-reset-owner', HOUR, 10),
     teamResetByIp: make('team-reset-ip', HOUR, 20),
+    // Registering a phone: 5 per hour per user and per IP; challenges 20 per hour per user.
+    deviceRegisterByUser: make('device-register-user', HOUR, 5),
+    deviceRegisterByIp: make('device-register-ip', HOUR, 5),
+    deviceChallengeByUser: make('device-challenge-user', HOUR, 20),
+    // Failed signatures: 20 per 15 minutes per device, then that device is locked for 15 minutes.
+    deviceSignatureFailures: make('device-signature-failures', 15 * MINUTE, 20),
   };
 }
 
