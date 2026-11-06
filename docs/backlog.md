@@ -213,7 +213,7 @@ No codebase exists yet, so this epic sets up everything the user-facing epics de
 
 ### The team
 
-- **AC7: Add staff.** Given I'm the owner, when I add a staff member with their name, phone number, and role (manager or sales associate), then a temporary password is shown once for me to give them in person.
+- **AC7: Add staff.** Given I'm the owner, when I add a staff member with their name, phone number, and role (manager or sales associate), then a temporary password is shown once for me to give them in person. If that phone number **already has a Shop Book account** (for example someone who also works in another shop), no password is shown and nothing about their account is revealed: they get an **invitation** to accept or decline at their next sign-in, and until then my team list shows only the name and number I typed, with "Waiting for them to accept". (Changed 5 Nov 2026.)
 - **AC8: First sign-in.** Given a staff member signs in with a temporary password, then they must choose their own password before using the app.
 - **AC9: Change a role.** Given I'm the owner, when I change someone's role, then their permissions change on their next sync, and the change is recorded.
 - **AC10: Remove staff.** Given I'm the owner, when I remove a staff member, then their next sync is refused, the business's records are wiped from their phone, and nothing they recorded before is lost or changed.

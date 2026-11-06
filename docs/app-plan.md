@@ -306,7 +306,7 @@ Vite, React, Router, Tailwind with design variables, the shared API helper, Vite
 
 ### FE2 — Sign up, sign in, PIN (F2, F8)
 
-Sign-up (owner and business, with email and the terms tick), sign-in by **phone number or email**, forgot password and reset-password screens, confirm-email screen and the "Email not confirmed" notice, Settings → My account (change password, phone number, email), first-sign-in password change and terms for staff, set PIN, PIN lock screen (5 minutes in the background, 5 wrong tries), sign out (warning if unsent records exist).
+Sign-up (owner and business, with email and the terms tick), sign-in by **phone number or email**, forgot password and reset-password screens, confirm-email screen and the "Email not confirmed" notice, Settings → My account (change password, phone number, email), first-sign-in password change and terms for staff, **invitations** (after sign-in, if `GET /api/auth/me` lists `invitations`, show each: "[business] invited you to join as [role]" with **Accept** and **Decline**), set PIN, PIN lock screen (5 minutes in the background, 5 wrong tries), sign out (warning if unsent records exist).
 
 **Done when:** a signed-in user reopens the app offline and only needs their PIN; 5 wrong PINs require an online sign-in; signing in works with the phone number and with the email; a reset link from the email sets a new password and the other phone is signed out; the token never stays in the address bar; every new screen works in English and Twi at 360px.
 
@@ -332,7 +332,7 @@ With **two real phones** (or one phone and a laptop browser) signed in to the sa
 
 ### FE4 — Team and phones (F3)
 
-Owner's team screen: add staff (name, phone number, role, email optional; shows the temporary password once), change role, **reset password** (confirmation, then the new temporary password shown once with "Give this to them in person"), remove. Owner's phones screen: list phones (name, person, last seen), revoke one with a confirmation.
+Owner's team screen: add staff (name, phone number, role, email optional; shows the temporary password once, only when the person is new: if the number already has an account, the answer has no temporary password and the member shows "Waiting for them to accept"; declined invitations show "Declined" and can be sent again), change role, **reset password** (confirmation, then the new temporary password shown once with "Give this to them in person"), remove. Owner's phones screen: list phones (name, person, last seen), revoke one with a confirmation.
 
 **Done when:** the owner adds a manager who can sign in on another phone and must set a new password; revoking that phone wipes it on its next sync.
 

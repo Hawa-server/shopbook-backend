@@ -160,3 +160,49 @@ A new email is kept as **pending** until its link is tapped; the old one keeps w
 ### Terms
 
 The privacy notice and terms are Markdown files in `legal/` (English and Twi; the Twi files are placeholders until translated). Sign-up records the version accepted and when. If the version ever goes up, people who accepted an older one get `403 TERMS_REQUIRED` on most endpoints until they accept the new one; `me`, sign-out, accept-terms, change-password and the language setting still work, so the app can get them there.
+
+---
+
+## BE3: the team
+
+### Which business? `X-Business` and `requireAuth`
+
+One person can belong to several businesses: their own shop, its practice shop, and maybe another shop they work in. So every business request says which business it's for with the `X-Business` header, and the header is **required**. A missing one is answered `400 BUSINESS_REQUIRED`, so a bug in the app can never quietly land a record in the wrong shop.
+
+`requireAuth` (`src/middleware/requireAuth.js`) then looks up the person's membership **in the database, on every request**:
+
+- no membership in that business (or just an invitation not yet accepted) → **404**, exactly like a business that doesn't exist, so nobody can find out which businesses exist;
+- a membership the owner ended → **403 `ACCESS_REMOVED`**, and the phone wipes that business's data;
+- the business is closing → **403 `BUSINESS_CLOSING`**;
+- a temporary password not yet replaced → **403 `PASSWORD_CHANGE_REQUIRED`**; terms not accepted → **403 `TERMS_REQUIRED`**.
+
+Then `requireRole('owner')` checks the role it just read. The phone's own idea of its role is never trusted: if the owner changes someone's role, it counts on their very next request.
+
+### Removing someone without signing them out everywhere
+
+Removing a member ends their membership in **this** business only (`removedAt` is set). Their `sessionVersion` doesn't change, so they stay signed in and keep working in their other businesses (ADR-19). Their next request to this business is refused, because `requireAuth` re-reads the membership every time. Nothing they recorded is changed. From BE5, their phones for this business are revoked in the same step.
+
+### Temporary passwords
+
+When the owner adds someone new, the server makes a **temporary password** like `k7m4p-q2xnr`: 10 random characters, lower case, without look-alikes (no 0/o, 1/l/i), so it's easy to read out and type on a phone. It appears **once**, in that one answer, which is never cached. The database keeps only its argon2id hash, and it never appears in the logs or in the ChangeLog. The person must choose their own password at their first sign-in (`mustChangePassword`), then accept the terms.
+
+### Invitations: why an existing account isn't "added"
+
+If the phone number already has a Shop Book account (someone who also works in another shop), the owner **can't** be allowed to set its password, or one owner could take over a person's access to another business. So instead:
+
+- the server creates an **invitation** (a membership waiting to be accepted); the account itself isn't touched;
+- the owner sees only the **name and number they typed** and "Waiting for them to accept", never the account's real name or email;
+- the answer has the same fields as for a new person, only without a temporary password;
+- the person sees the invitation in `GET /api/auth/me` at their next sign-in and accepts or declines it. Only they can answer it.
+
+### Resetting a staff member's password, safely
+
+A staff member with no confirmed email who forgets their password asks the owner, who gets a new temporary password for them (all their sign-ins end). If that person **also belongs to another business**, the reset is refused (`RESET_NOT_ALLOWED`): a password works everywhere, so one owner must never be able to set it. They use **Forgot password** by email instead, or ask for help.
+
+### The ChangeLog
+
+Every team change (adding or inviting, accepting, declining, a role change, a password reset, a removal) adds a row to `ChangeLog` **in the same transaction** as the change: who, when, and what it was before and after. Because it's the same transaction, the history can never miss a change or show one that didn't happen. Rows are only ever added. From BE5 the same table records every edit of products, customers and settings.
+
+### The database's state rule for memberships
+
+A membership can only be in one of three states, enforced by a `CHECK` in MySQL: **active**; **invited** (not active, not ended, with an invitation time); **ended** (removed, or declined). An owner can never be an invitation, and the one-active-owner key from BE2 still applies.

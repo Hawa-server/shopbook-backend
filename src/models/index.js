@@ -74,9 +74,14 @@ function defineModels(sequelize) {
     businessId: ref(),
     userId: ref(),
     role: { type: DataTypes.ENUM('owner', 'manager', 'associate'), allowNull: false },
+    // For an invitation: the name the owner typed (shown to the owner instead
+    // of the account's own name) and when it was sent.
+    invitedName: { type: DataTypes.STRING(60), allowNull: true },
+    invitedAt: time(),
     isActive: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
     createdBy: ref(),
     removedAt: time(),
+    declinedAt: time(),
     createdAt: time(false),
     updatedAt: time(false),
   }, common);
@@ -93,11 +98,28 @@ function defineModels(sequelize) {
     createdAt: time(false),
   }, { freezeTableName: true, timestamps: true, updatedAt: false });
 
-  // Associations used to read a person's businesses with their names.
+  // One row per change (who, when, before, after). Insert only: there is no
+  // code that updates or deletes ChangeLog rows. No createdAt/updatedAt:
+  // changedAt is the time.
+  const ChangeLog = sequelize.define('ChangeLog', {
+    id,
+    businessId: ref(),
+    entity: { type: DataTypes.STRING(40), allowNull: false },
+    entityId: ref(),
+    changedBy: ref(),
+    changedAt: time(false),
+    before: { type: DataTypes.JSON, allowNull: true },
+    after: { type: DataTypes.JSON, allowNull: true },
+    conflict: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+  }, { freezeTableName: true, timestamps: false });
+
+  // Associations used to read a person's businesses with their names, and a
+  // business's members with their accounts.
   Membership.belongsTo(Business, { foreignKey: 'businessId', as: 'business' });
   Business.hasOne(BusinessSettings, { foreignKey: 'businessId', as: 'settings' });
+  Membership.belongsTo(User, { foreignKey: 'userId', as: 'user' });
 
-  return { User, Business, BusinessSettings, Location, Membership, EmailToken };
+  return { User, Business, BusinessSettings, Location, Membership, EmailToken, ChangeLog };
 }
 
 module.exports = { defineModels };

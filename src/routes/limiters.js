@@ -26,6 +26,12 @@ function createAuthLimiters({ now, unlimited = false } = {}) {
     // Checking the current password (change password, phone, email): the same
     // limit as sign-in, per person, so it can't be used to guess passwords.
     passwordCheckByUser: make('password-check-user', 15 * MINUTE, 10),
+    // Adding team members: 20 per hour per owner, 30 per hour per IP.
+    teamAddByOwner: make('team-add-owner', HOUR, 20),
+    teamAddByIp: make('team-add-ip', HOUR, 30),
+    // The owner resetting a staff member's password: 10 per hour per owner, 20 per IP.
+    teamResetByOwner: make('team-reset-owner', HOUR, 10),
+    teamResetByIp: make('team-reset-ip', HOUR, 20),
   };
 }
 
