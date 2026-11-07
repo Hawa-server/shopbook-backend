@@ -118,6 +118,7 @@ Each story below will go through the four planning steps (acceptance criteria, s
 ### Epic 9: Language
 
 52. **English or Twi.** As anyone in the shop, I want to use the app in a supported language, so that everyone on the team understands it.
+60. **Spoken help.** As someone in the shop who finds reading hard, I want to tap a speaker and hear what to do on a screen, in my language, so that I can use the app without reading every word.
 
 ### Epic 10: Accounts, privacy and support (added 1 Nov 2026)
 
@@ -190,6 +191,7 @@ Each story below will go through the four planning steps (acceptance criteria, s
 - **Stage 2:** manager approval for corrections recorded by sales associates; more locations (a second shop, a warehouse), each with its own stock and staff; **moving stock between locations**; the owner viewing all locations or one at a time; a private, always-up-to-date link for each customer's statement; weekly and monthly reports; automatic SMS reminders.
 - **Business side (alongside the stages):** how shops find and sign up for the app, whether it's free or paid (for example, free with a paid plan for more staff or locations), and support for shops that get stuck.
 - **Stage 3:** records to show a lender (PDF export), matching mobile money payments, voice input, supplier credit (goods the business takes on credit).
+- **Later (noted 7 Nov 2026), not in this version:** voice notes on customers and debts, and product photos. Both need file storage (somewhere safe to keep recordings and pictures, and to sync them between phones) that the app doesn't have yet.
 - **Later (noted 1 Nov 2026):** handing a business to a new owner (for example, when the owner sells the shop or can't continue). Today a business has exactly one owner who can't be removed (Epic 0, AC11).
 
 ---
@@ -273,6 +275,7 @@ No codebase exists yet, so this epic sets up everything the user-facing epics de
 - **AC43: Support tools.** Given the developer needs to help a shop, then support tools, run from the developer's laptop and never from the app, can find a business by phone number or email, reset an owner's password (AC35), and count businesses and phones.
 - **AC44: Support is recorded.** Given the developer uses a support tool that changes something, then the action, the reason, who did it and when are recorded.
 - **AC45: Business details set once.** (Added 3 Nov 2026.) Given I'm the owner, when I open **More → Business settings**, then I can change the business name, the shop phone number and a short receipt note; every phone shows the new name after its next sync, and receipts, reminders and statements fill them in automatically. Staff can see the name but not change it.
+- **AC46: Spoken help.** (Added 7 Nov 2026.) Given I'm on a main screen or a confirmation, when I tap the speaker button (with the label "Listen"), then a short clip **recorded by a person** (not computer speech) plays in my language, English or Twi, saying what the screen is for and what to do next. It plays without internet, and tapping again stops it. It never plays by itself. If a screen has no clip in my language yet, the button isn't shown. All the clips together are under 1 MB.
 
 ## Step 2: Stories and points
 
@@ -296,8 +299,9 @@ No codebase exists yet, so this epic sets up everything the user-facing epics de
 | F15 | Help: report a problem on WhatsApp | 2 | Should have | AC41 |
 | F16 | Device signing keys: enrol with password and proof of key, sign every business request (gap story) | 5 | Must have | F-26 |
 | F17 | Concurrency safety: one lock order, deadlock retries, database constraints, consistency checks, concurrency and recovery tests (gap story) | 5 | Must have | AC17, AC18 (under real simultaneous use) |
+| F18 | Spoken help: recorded clips on main screens and confirmations | 3 | Should have | AC46 |
 
-**Epic 0 total:** 18 stories, **85 points** (Must have: 75; Should have: 10). (The sync engine, first estimated at 13, was split into F5a and F5b; see Step 4. F10–F15 added on 1 Nov 2026; F16–F17 added after the engineering reviews the same day.)
+**Epic 0 total:** 19 stories, **88 points** (Must have: 75; Should have: 13). (The sync engine, first estimated at 13, was split into F5a and F5b; see Step 4. F10–F15 added on 1 Nov 2026; F16–F17 added after the engineering reviews the same day; F18 added on 7 Nov 2026.)
 
 ## Step 3: Product owner decisions
 

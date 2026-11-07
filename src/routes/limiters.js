@@ -38,6 +38,8 @@ function createAuthLimiters({ now, unlimited = false } = {}) {
     deviceChallengeByUser: make('device-challenge-user', HOUR, 20),
     // Failed signatures: 20 per 15 minutes per device, then that device is locked for 15 minutes.
     deviceSignatureFailures: make('device-signature-failures', 15 * MINUTE, 20),
+    // Sync (push and pull together): 120 per 15 minutes per person.
+    syncByUser: make('sync-user', 15 * MINUTE, 120),
   };
 }
 

@@ -8,6 +8,7 @@ The contract between the Shop Book server and the phone app. **The app uses only
 
 Newest first.
 
+- **BE5 Part B (Sync):** `POST /api/sync/push` and `GET /api/sync/pull`, the first sync operation **`settings.update`**, the pull row types `settings`, `location`, `membership` and `device` (memberships and devices to the owner only). Per-operation results `saved`, `duplicate`, `rejected` (codes `INVALID_PAYLOAD`, `UNKNOWN_OPERATION`, `OP_ID_CONFLICT`, `FORBIDDEN`, `VALIDATION_FAILED`). Sync is limited to 120 requests per 15 minutes per person. Every synced row has a `serverSeq`; team, phone and settings changes made through other endpoints also appear in the pull.
 - **BE5 Part A (Phones and signed requests):** **every business endpoint is now signed** with the phone's own key (four headers: `X-Device-Id`, `X-Signed-At`, `X-Nonce`, `X-Signature`; exact text in Conventions), except the two registration endpoints. Every response carries **`X-Server-Time`**. New endpoints: `POST /api/devices/challenge`, `POST /api/devices` (register this phone: password + signed challenge), `GET /api/devices`, `DELETE /api/devices/:deviceId` (owner). Removing a member now also revokes their phones for that business. New error codes: `DEVICE_NOT_REGISTERED`, `DEVICE_REVOKED`, `DEVICE_SIGNATURE_INVALID`, `CLOCK_OUT_OF_RANGE`, `NONCE_REUSED`, `CHALLENGE_INVALID`, `DEVICE_KEY_INVALID`, `DEVICE_ID_TAKEN`, `DEVICE_ALREADY_REVOKED`; `RATE_LIMITED` also when a phone is locked after failed signatures.
 - **BE4.5 (International-ready, Ghana first):** money is described in **minor units** of the business's currency (field names end in `Minor`; GHS has 2 decimals, so `12000` = GH₵ 120.00): format it with the business's `currency` rules, not `Intl.NumberFormat`. Phone numbers are **E.164** (`+233…`). Business dates use the **business's time zone**. `language` is an open list of supported tags (launch `en`, `tw`) from the new **`GET /api/reference`** (countries, currencies, languages, payment methods with their names: mobile money is "MoMo" in Ghana). `me.businesses[]` gains `country`, `currency`, `timezone`, `defaultLanguage`, `paymentMethods`, `localeLocked`. Sign-up takes an optional `country` (default `GH`, the only one at launch); sign-in, forgot password and change phone take an optional `country` for reading local numbers. New endpoint `PATCH /api/business/locale` (owner) and error `409 CURRENCY_LOCKED`. The phone `VALIDATION_FAILED` message is now "Enter a valid mobile number, for example 024 123 4567."
 - **BE4 (Isolation):** no change to any endpoint. Tests now prove that every business endpoint answers another business's IDs exactly like unknown ones (`404 NOT_FOUND`, same body), and the database refuses cross-business references.
@@ -175,6 +176,9 @@ Decide what to do from **`code`** (stable), never from `message` (wording may ch
 | `DEVICE_KEY_INVALID` | 400 | Registering: the public key isn't a valid P-256 key, or the challenge wasn't signed by it. | App bug: re-check the key export and the signature. |
 | `DEVICE_ID_TAKEN` | 409 | Registering: this device ID is already registered (a phone never swaps its key). | Make a **new** device ID (and key) and register again. |
 | `DEVICE_ALREADY_REVOKED` | 409 | The owner tried to revoke a phone that's already revoked. | Refresh the phone list. |
+| `INVALID_PAYLOAD` | (push result) | An operation or its payload is malformed. `fields` says where. Nothing was stored for it. | "Needs attention": app bug. A corrected operation may reuse the same `opId`. |
+| `UNKNOWN_OPERATION` | (push result) | The operation `type` doesn't exist (yet). | "Needs attention": app bug or an app newer than the server. |
+| `OP_ID_CONFLICT` | (push result) | This `opId` was already used for a different operation (other device, type or payload). Nothing applied. | "Needs attention" marked "App problem: tell the developer"; include it in the Help message. |
 | `INTERNAL_ERROR` | 500 | Something unexpected went wrong on the server. `message` is "Something went wrong. Reference: \<request id\>". | **Temporary:** keep any unsent records and retry later. Keep the reference (also in `X-Request-Id`) for the Help message. |
 
 Other failures without the error format:
@@ -721,13 +725,182 @@ Removes a member from **this** business, or cancels a pending invitation. **Thei
 
 ---
 
+---
+
+## Sync
+
+Push first, then pull, every time the app syncs (on opening, every few minutes, after a save, when the network comes back). Both are business endpoints for **every role**, signed.
+
+### POST /api/sync/push
+
+Sends the outbox: at most **200** operations, **oldest first**. Each is processed **in order**, in its own transaction, and gets its own result; one rejected operation doesn't stop the others.
+
+- **Who:** any member. **Business:** yes. **Signed:** yes.
+- **Request:**
+
+  ```json
+  {
+    "deviceId": "3f1c2a9e-6b7d-4c1e-9a2b-0d4e5f6a7b8c",
+    "operations": [
+      {
+        "opId": "6d0f8a1e-2b3c-4d5e-8f9a-0b1c2d3e4f5a",
+        "type": "settings.update",
+        "recordedOnline": true,
+        "payload": { "baseVersion": 1, "changes": { "receiptNote": "Goods sold are returnable within 7 days" } }
+      }
+    ]
+  }
+  ```
+
+| Field | Rules |
+|---|---|
+| `deviceId` | This phone's device ID for this business: the same as `X-Device-Id` (otherwise `400 VALIDATION_FAILED`, `fields.deviceId`). |
+| `operations` | 0–200 operations, oldest first (more: `400 VALIDATION_FAILED`). |
+| `operations[].opId` | A UUID made on the phone **when the record was saved**, kept with the outbox entry and **never changed**, even across retries. It's what makes retries safe. |
+| `operations[].type` | One of the types in "Sync operations" below. |
+| `operations[].recordedOnline` | Whether the phone had a connection when the record was made (a hint, used for the clock-skew flag from BE8). Default `false`. |
+| `operations[].payload` | The operation's fields (see each type). |
+
+- **Response 200:**
+
+  ```json
+  {
+    "results": [
+      { "opId": "6d0f…", "status": "saved", "result": { "version": 2 } },
+      { "opId": "7e1a…", "status": "duplicate", "result": { "version": 2 } },
+      { "opId": "8f2b…", "status": "rejected", "error": { "code": "FORBIDDEN", "message": "Your role can't do this." } }
+    ],
+    "serverTime": "2026-11-09T10:00:00.000Z"
+  }
+  ```
+
+**What to do with each result** (one per operation, in the same order):
+
+| `status` | Meaning | What the app does |
+|---|---|---|
+| `saved` | Applied now. `result` holds what the type returns (e.g. the new `version`). | Store the result on the local record; remove the operation from the outbox (in one local transaction). |
+| `duplicate` | Already applied earlier (a retry whose first answer was lost). `result` is the same as the first time. | Exactly as for `saved`. Nothing was applied twice. |
+| `rejected` | Refused, **permanently**: sending it again will always give the same answer. `error.code` says why (and `error.fields` for a payload problem). | Move it to **"Needs attention"** with the message; never drop it silently. `OP_ID_CONFLICT`: mark "App problem: tell the developer" (it means this phone sent two different things with one ID, a bug). |
+
+Rejection codes in results: `INVALID_PAYLOAD` (the operation or its payload is malformed; `fields` says where; nothing was stored, so a **corrected** operation may reuse the `opId`), `UNKNOWN_OPERATION` (no such type), `OP_ID_CONFLICT`, `FORBIDDEN` (this person's role can't do it), `VALIDATION_FAILED` (a business rule, with `fields`). Each type lists its own.
+
+- **Errors (the whole request):** `400 VALIDATION_FAILED` (`deviceId`, too many operations), `429 RATE_LIMITED`, plus the business-endpoint errors. **Any 5xx, a timeout or a network error is temporary**: keep every operation in the outbox and push again later (operations already saved come back as `duplicate`). A 5xx is never a rejection.
+- **Rate limit:** 120 sync requests (push and pull together) per 15 minutes per person. **Available since:** BE5.
+
+### GET /api/sync/pull
+
+Everything that changed after the phone's cursor, page by page.
+
+- **Who:** any member. **Business:** yes. **Signed:** yes.
+- **Request:** `GET /api/sync/pull?since=<cursor>&limit=<1..500>` (`since` default 0, `limit` default and maximum 500). Sign the path **with** its query string exactly as sent.
+- **Response 200:**
+
+  ```json
+  {
+    "rows": [
+      { "type": "settings", "serverSeq": 41, "data": { "businessName": "Ama Fabrics", "version": 3, "…": "…" } },
+      { "type": "location", "serverSeq": 42, "data": { "id": "…", "name": "Ama Fabrics", "type": "shop" } }
+    ],
+    "nextCursor": 45,
+    "hasMore": false,
+    "watermark": 45
+  }
+  ```
+
+| Field | Meaning |
+|---|---|
+| `rows` | The changed rows **this person may see**, in `serverSeq` order. A row with an ID the phone already has **replaces** its local copy. Row types: see "Pull rows". |
+| `nextCursor` | The last sequence number the server **scanned** (not the last row returned). Save it as the new cursor **in the same local transaction** as the rows. A page can have **no rows** and still move the cursor (rows this person may not see); that's normal. |
+| `hasMore` | `true`: ask again with `since=nextCursor` straight away. |
+| `watermark` | The business's last sequence number when this pull started. Changes made during the pull come in the next one; nothing is skipped. |
+
+- A new phone starts with `since=0` and pages through everything.
+- **Errors:** `400 VALIDATION_FAILED` (bad `since`/`limit`), `429 RATE_LIMITED`, plus the business-endpoint errors (`ACCESS_REMOVED` and `DEVICE_REVOKED` mean: wipe this business's local data).
+- **Rate limit:** shared with push (above). **Available since:** BE5.
+
+---
+
 ## Sync operations
 
-None yet (from BE5).
+Every operation type a phone may push, with its payload, who may send it, and its results. More types arrive with each feature (products in BE6, stock in BE7, sales in BE8…).
+
+#### `settings.update`
+
+The owner changes the business's settings (More → Business settings). Editable records follow **"last change received wins, with history"**: send the `version` the phone had when the person started editing (`baseVersion`). The change is applied even if someone changed the settings in between (the server records that as a conflict in its history), and the new `version` comes back.
+
+- **Who:** owner only (others: `rejected` `FORBIDDEN`). **Since:** BE5.
+- **Payload:**
+
+  ```json
+  { "baseVersion": 2, "changes": { "businessName": "Ama Fabrics & Shoes", "paymentMethods": ["cash", "mobile_money"] } }
+  ```
+
+| Field | Rules |
+|---|---|
+| `baseVersion` | The settings `version` the phone had (integer ≥ 1). |
+| `changes` | At least one of the fields below; any other field is refused (`INVALID_PAYLOAD`). |
+| `changes.businessName` | 1–60 characters. Shown in the header, receipts, statements. |
+| `changes.receiptPhone` | 1–20 characters, or `null` (none). The shop's number printed on receipts. |
+| `changes.receiptNote` | Up to 120 characters, or `null`. Printed at the bottom of receipts. |
+| `changes.defaultLanguage` | A language tag (`en`, `tw`): the default for new customers' messages. |
+| `changes.lowStockThreshold` | Integer 0–100000. A size is "Low" at or below it (unless the product has its own level). |
+| `changes.returnPeriodDays` | Integer 0–365. Returns after this get a warning (BE10). |
+| `changes.defaultCreditLimitMinor` | Integer ≥ 0 in minor units, or `null` (no default limit). Copied to new customers (BE9). |
+| `changes.paymentMethods` | Non-empty list of payment-method codes **offered in the business's country** (`GET /api/reference`: `cash`, `mobile_money` in Ghana). |
+
+- **Result (`saved`):** `{ "version": 3 }`, the new version. Update the local settings row; the full row also comes in the next pull.
+- **Rejected:** `FORBIDDEN`, `INVALID_PAYLOAD` (`fields`), `VALIDATION_FAILED` (`fields.paymentMethods`: a method not offered in this country).
+
+---
 
 ## Pull rows
 
-None yet (from BE5).
+Every row type a pull can return. `data` holds only the fields listed; the server removes what a role may not see.
+
+| `type` | Owner | Manager | Sales associate |
+|---|---|---|---|
+| `settings` | ✅ | ✅ | ✅ |
+| `location` | ✅ | ✅ | ✅ |
+| `membership` | ✅ | ✗ | ✗ |
+| `device` | ✅ | ✗ | ✗ |
+
+Managers and associates learn their own role and business from `GET /api/auth/me`; the phone's copy of a role is for display only (the server checks it on every request).
+
+**`settings`** (one row per business):
+
+```json
+{
+  "businessId": "8a0b…", "businessName": "Ama Fabrics", "receiptPhone": null, "receiptNote": null,
+  "paymentMethods": ["cash", "mobile_money"], "defaultLanguage": "en", "lowStockThreshold": 3,
+  "returnPeriodDays": 7, "defaultCreditLimitMinor": null, "version": 1, "updatedBy": "c4d5…", "updatedAt": "2026-11-09T09:00:00.000Z"
+}
+```
+
+`version` is the `baseVersion` to send with the next `settings.update`. `updatedBy` is a user ID, or `null` for a system change.
+
+**`location`** (a shop or warehouse; stage 1: one shop): `{ "id": "…", "name": "Ama Fabrics", "type": "shop" }`. `type`: `shop` or `warehouse`.
+
+**`membership`** (owner only; the team list, as in `GET /api/team`):
+
+```json
+{
+  "id": "1b2c…", "userId": "8c7b…", "name": "Kofi Boateng", "phone": "+233241112233", "role": "associate",
+  "status": "active", "invitedAt": null, "joinedAt": "2026-11-05T09:00:00.000Z", "removedAt": null
+}
+```
+
+`id` is the `membershipId`. For an invitation (`status` `invited`, or `declined`/`removed` before it was accepted) `name` is **the name the owner typed** and `userId` is `null`: never the account's own details.
+
+**`device`** (owner only; the phone list, as in `GET /api/devices`):
+
+```json
+{
+  "id": "3f1c…", "deviceCode": "K7M", "name": "Ama's Tecno", "userId": "8c7b…", "isActive": true,
+  "lastSeenAt": "…", "lastSyncAt": "…", "lockedUntil": null, "registeredAt": "…", "revokedAt": null
+}
+```
+
+`lastSeenAt` and `lastSyncAt` are updated at most every 5 minutes and **don't** by themselves put the row in a pull (call `GET /api/devices` for fresh values).
 
 ## Enums and flags
 

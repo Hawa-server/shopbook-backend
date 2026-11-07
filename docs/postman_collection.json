@@ -995,6 +995,75 @@
           ]
         }
       ]
+    },
+    {
+      "name": "BE5 Sync (signed)",
+      "item": [
+        {
+          "name": "POST /api/sync/push (settings.update) \u2014 add the 4 signing headers from: npm run dev:sign -- headers --method POST --path /api/sync/push --business <id> --body '<the exact JSON below>'",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/sync/push",
+            "header": [
+              {
+                "key": "X-Requested-With",
+                "value": "XMLHttpRequest"
+              },
+              {
+                "key": "X-Business",
+                "value": "{{businessId}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"deviceId\":\"<your test device id>\",\"operations\":[{\"opId\":\"6d0f8a1e-2b3c-4d5e-8f9a-0b1c2d3e4f5a\",\"type\":\"settings.update\",\"recordedOnline\":true,\"payload\":{\"baseVersion\":1,\"changes\":{\"receiptNote\":\"Returns within 7 days\"}}}]}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('a result per operation', () => pm.expect(pm.response.json().results).to.have.length(1));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /api/sync/pull?since=0 \u2014 add the 4 signing headers from: npm run dev:sign -- headers --method GET --path /api/sync/pull?since=0 --business <id>",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/sync/pull?since=0",
+            "header": [
+              {
+                "key": "X-Requested-With",
+                "value": "XMLHttpRequest"
+              },
+              {
+                "key": "X-Business",
+                "value": "{{businessId}}"
+              }
+            ]
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('cursor fields', () => { const b = pm.response.json(); pm.expect(b).to.have.keys(['rows','nextCursor','hasMore','watermark']); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
     }
   ]
 }

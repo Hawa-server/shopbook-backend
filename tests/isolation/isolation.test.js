@@ -72,6 +72,23 @@ async function expectSameAsUnknown(method, urlFor, body, bId = B.staffId) {
 // One case per business route: what A tries against B, and the proof that
 // nothing of B's changed.
 const CASES = {
+  'POST /api/sync/push': async () => {
+    // A's settings.update changes A only; B's settings are untouched.
+    const bBefore = await db.getModels().BusinessSettings.findByPk(B.businessId);
+    const res = await A.agent.post('/api/sync/push').set(biz(A.businessId)).send({
+      deviceId: A.deviceId,
+      operations: [{ opId: randomUUID(), type: 'settings.update', payload: { baseVersion: 1, changes: { businessName: 'Changed by A' } } }],
+    });
+    expect(res.body.results[0].status).toBe('saved');
+    const bAfter = await db.getModels().BusinessSettings.findByPk(B.businessId);
+    expect([bAfter.businessName, bAfter.version]).toEqual([bBefore.businessName, bBefore.version]);
+  },
+  'GET /api/sync/pull': async () => {
+    const res = await A.agent.get('/api/sync/pull?since=0').set(biz(A.businessId));
+    expect(res.status).toBe(200);
+    const text = JSON.stringify(res.body);
+    for (const leak of [B.businessId, B.ownerId, B.deviceId, 'Shop B', 'Owner B', 'Staff B', ...B.memberIds]) expect(text).not.toContain(leak);
+  },
   'POST /api/devices/challenge': async () => {
     const before = await db.getModels().DeviceChallenge.count({ where: { businessId: B.businessId } });
     expect((await call(A.agent, 'POST', '/api/devices/challenge', biz(B.businessId))).status).toBe(404);

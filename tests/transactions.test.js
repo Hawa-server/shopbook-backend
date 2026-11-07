@@ -1,6 +1,7 @@
 // runTransaction: retries a deadlock (up to 3 times), then answers 503
-// TRY_AGAIN; never retries other errors. And a scan of the code: no file
-// except src/db.js may open a transaction or lock rows itself.
+// TRY_AGAIN; never retries other errors. And scans of the code: only
+// src/db.js opens transactions; only src/sync/runOperation.js locks rows and
+// touches SyncSequence.
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -49,8 +50,8 @@ describe('runTransaction', () => {
   });
 });
 
-describe('only runTransaction opens transactions', () => {
-  // Every .js file under src/, except db.js where runTransaction lives.
+describe('who may open transactions, lock rows and touch SyncSequence', () => {
+  // Every .js file under src/, as [relative path, text].
   function sourceFiles(dir) {
     return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
       const full = path.join(dir, entry.name);
@@ -58,12 +59,24 @@ describe('only runTransaction opens transactions', () => {
       return entry.name.endsWith('.js') ? [full] : [];
     });
   }
+  const root = path.join(__dirname, '../src');
+  const files = sourceFiles(root).map((file) => [path.relative(root, file), fs.readFileSync(file, 'utf8')]);
+  const offenders = (pattern, allowed) => files.filter(([file, text]) => !allowed.includes(file) && pattern.test(text)).map(([file]) => file);
 
-  test('no file in src/ calls .transaction( or uses FOR UPDATE, except src/db.js', () => {
-    const root = path.join(__dirname, '../src');
-    const offenders = sourceFiles(root)
-      .filter((file) => path.relative(root, file) !== 'db.js')
-      .filter((file) => /\.transaction\(|FOR\s+UPDATE|LOCK\.UPDATE/i.test(fs.readFileSync(file, 'utf8')));
-    expect(offenders).toEqual([]);
+  test('only src/db.js opens transactions (runTransaction, withSavepoint)', () => {
+    expect(offenders(/\.transaction\(/, ['db.js'])).toEqual([]);
+  });
+
+  test('only src/sync/runOperation.js locks rows (FOR UPDATE)', () => {
+    expect(offenders(/FOR\s+UPDATE|LOCK\.UPDATE|lock:\s*true/i, [path.join('sync', 'runOperation.js')])).toEqual([]);
+  });
+
+  test('only src/sync/runOperation.js touches SyncSequence (takeSequence); the model file only defines it', () => {
+    // The one other file: the READ-ONLY consistency check (SELECTs only; it
+    // compares rows with the counter). Checked below to contain no writes.
+    const readOnlyCheck = path.join('checks', 'syncChecks.js');
+    expect(offenders(/SyncSequence/, [path.join('sync', 'runOperation.js'), path.join('models', 'index.js'), readOnlyCheck])).toEqual([]);
+    const checkText = files.find(([file]) => file === readOnlyCheck)[1];
+    expect(checkText).not.toMatch(/\b(INSERT|UPDATE|DELETE|REPLACE|ALTER|DROP|TRUNCATE)\b|\.(create|update|destroy|upsert)\(/);
   });
 });

@@ -16,6 +16,7 @@ const { requireAuth, requireRole } = require('../middleware/requireAuth');
 const { requireDevice } = require('../middleware/requireDevice');
 const { scoped } = require('../services/scoped');
 const devices = require('../services/devices');
+const { stampSequence } = require('../sync/runOperation');
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -138,9 +139,12 @@ function revokeDevice(deps) {
     if (!existing) throw new AppError(404, 'NOT_FOUND', 'Not found');
     if (!existing.isActive) throw new AppError(409, 'DEVICE_ALREADY_REVOKED', 'This phone has already been removed.');
     const now = new Date(deps.now());
-    await deps.runTransaction((transaction) => devices.revokeDevices(models, transaction, {
-      businessId: req.business.id, where: { id: deviceId }, revokedBy: req.user.id, now,
-    }));
+    await deps.runTransaction(async (transaction) => {
+      const revoked = await devices.revokeDevices(models, transaction, {
+        businessId: req.business.id, where: { id: deviceId }, revokedBy: req.user.id, now,
+      });
+      await stampSequence(models, transaction, req.business.id, revoked.map((id) => ({ model: 'Device', where: { id } })));
+    });
     const device = await s.Device.findOne({ where: { id: deviceId }, include: [{ model: models.User, as: 'user' }] });
     res.json({ device: deviceView(device) });
   };

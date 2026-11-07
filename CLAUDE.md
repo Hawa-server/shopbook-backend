@@ -128,4 +128,4 @@ Fill these in during BE1:
 - Start the server: `npm run dev` (local, reads `.env`, reloads on change); `npm start` on Render
 - Run the tests: `npm test` (runs `check:api-docs`, then Jest with `.env.test`)
 - Run migrations (local): `npm run db:migrate` (development, `.env`); `npm run db:migrate:test` (test, `.env.test`); `db:migrate:status`, `db:migrate:undo`
-- Run the consistency checks (local): not yet; added from BE5 (`check:sequences`, `check:operations`) and later tasks
+- Run the consistency checks (local): `npm run check:sequences`, `npm run check:operations` (read-only, development database `.env`); the others (`check:balances`, `check:stock`, `check:receipts`) arrive with their tasks

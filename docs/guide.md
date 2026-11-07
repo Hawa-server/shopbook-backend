@@ -454,3 +454,60 @@ Postman can't sign with a key by itself, so `scripts/dev-sign.js` does it with a
 1. `npm run dev:sign -- new-key`
 2. In Postman: `POST /api/devices/challenge` (signed in, `X-Business`), then `npm run dev:sign -- register-body --challenge <challenge>`. Paste the JSON into `POST /api/devices`, typing your password where it says so.
 3. For each signed request: `npm run dev:sign -- headers --method GET --path /api/team --business <id>`, and copy the four headers into Postman. Each set works once and for 5 minutes.
+
+---
+
+## BE5 Part B: sync
+
+### The shape of sync: push, then pull
+
+A phone keeps working offline. Everything it records goes into an **outbox**. When there's a connection, it **pushes** the outbox to the server, then **pulls** everything that changed since last time. Pushing first means its own records come back with the server's sequence numbers.
+
+### Never twice: `opId` and `ProcessedOperation`
+
+Networks fail at the worst moment: the server saves a sale, but the answer never reaches the phone, so the phone sends it again. Each operation carries an **`opId`** (a UUID made on the phone when the record was saved, never changed), and the server keeps one **`ProcessedOperation`** row per `opId`, **in the same transaction** as the operation's effect:
+
+- the same operation again → **`duplicate`**, with the same stored answer; nothing is applied twice;
+- the same `opId` with **different** content → **`OP_ID_CONFLICT`** (a bug in the phone): nothing applied, and the rest of the batch carries on;
+- a business-rule refusal (wrong role, invalid setting) is **stored**, so the answer never changes;
+- a **temporary** failure (database down, deadlock after 3 retries) rolls **everything** back, including the `ProcessedOperation` row, and the push answers with a 5xx. Nothing is stored as a rejection: the phone simply tries again later, and what was already saved comes back as `duplicate`.
+
+Two copies of one operation arriving at the same instant can't both apply: the first to insert the `ProcessedOperation` row wins (its unique key), and the second waits, then finds it taken.
+
+### `runOperation`: one order for everything
+
+Every pushed operation runs through `src/sync/runOperation.js`, always in the same steps:
+
+1. **Reserve** the `opId`.
+2. **Lock** the rows it reads, always in one global order (customer → sale → sale lines → products → reversal original → settings). Two operations locking the same rows in different orders could wait for each other forever (a *deadlock*); one order everywhere prevents most of that, and the rest is retried.
+3. **Write** the records.
+4. (BE9) rebuild the customer's balance.
+5. **Take sequence numbers last** (`takeSequence`). The counter is the busiest row in the business, so it's held for the shortest possible time.
+
+A rejected operation is undone with a **savepoint** (a mark inside the transaction), so its half-done writes vanish while its rejection is still saved. Only `runOperation.js` may lock rows or take sequence numbers; a test reads the code to make sure.
+
+### The sequence counter, the watermark and the cursor
+
+Each business has **one counter** (`SyncSequence`). Every insert or change of a synced row takes the next number into that row's `serverSeq`. That includes changes made outside sync, such as the team, phones and the locale. A phone remembers the highest number it has stored: its **cursor**.
+
+A pull reads the counter first: the **watermark**. It then scans the numbers after the cursor up to the watermark, and returns the rows this person may see. Two details prevent the classic sync bugs:
+
+- **Rows saved during the pull** get numbers above the watermark, so they come in the *next* pull. Nothing is skipped.
+- **The new cursor is the last number *scanned*,** not the last row returned. An associate doesn't receive memberships or devices; if a page held only those, it returns no rows but still moves the cursor on, so the phone never gets stuck asking again.
+
+### Who sees what, enforced by the server
+
+The pull filters rows by role on the server: settings and locations go to everyone, memberships and devices only to the owner. Hiding something on screen is never the protection; the data simply never reaches a phone that shouldn't have it. From BE6 and BE8 the same filter removes cost prices and other associates' sales.
+
+### `settings.update`: last change wins, with history
+
+Settings are an **editable** record: two owner phones could change them offline. The phone sends the `version` it started from (`baseVersion`). The server applies the change anyway (the last one received wins), adds 1 to `version`, and writes the previous values to the `ChangeLog`, marked `conflict` when someone else had changed it first. Only listed fields can change; anything else in the payload is refused.
+
+### Checking it: `check:sequences` and `check:operations`
+
+Two **read-only** commands look for anything inconsistent and change nothing:
+
+- `npm run check:sequences`: a synced row without a number, a number used twice, a number above the counter, a business without a counter. (Gaps are normal: a changed row takes a new number and leaves its old one unused.)
+- `npm run check:operations`: an operation left half-done (`pending`), a result or error code missing, or an operation recorded under someone else's phone.
+
+They run after the tests, after a restore, and weekly in production. A repair, if ever needed, is a separate support script run only after a backup.

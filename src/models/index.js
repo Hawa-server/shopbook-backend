@@ -61,6 +61,7 @@ function defineModels(sequelize) {
     returnPeriodDays: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 7 },
     defaultCreditLimitMinor: { type: DataTypes.BIGINT, allowNull: true }, // whole minor units of the business's currency
     version: { type: DataTypes.INTEGER.UNSIGNED, allowNull: false, defaultValue: 1 },
+    serverSeq: { type: DataTypes.BIGINT.UNSIGNED, allowNull: true }, // the business's sync sequence number (BE5)
     updatedBy: ref(true), // NULL = a system change (no person); otherwise a member of this business
     createdAt: time(false),
     updatedAt: time(false),
@@ -71,6 +72,7 @@ function defineModels(sequelize) {
     businessId: ref(),
     name: { type: DataTypes.STRING(60), allowNull: false },
     type: { type: DataTypes.ENUM('shop', 'warehouse'), allowNull: false, defaultValue: 'shop' },
+    serverSeq: { type: DataTypes.BIGINT.UNSIGNED, allowNull: true }, // the business's sync sequence number (BE5)
     createdAt: time(false),
     updatedAt: time(false),
   }, common);
@@ -88,6 +90,7 @@ function defineModels(sequelize) {
     createdBy: ref(),
     removedAt: time(),
     declinedAt: time(),
+    serverSeq: { type: DataTypes.BIGINT.UNSIGNED, allowNull: true }, // the business's sync sequence number (BE5)
     createdAt: time(false),
     updatedAt: time(false),
   }, common);
@@ -135,6 +138,7 @@ function defineModels(sequelize) {
     signatureLockedUntil: time(), // set after too many failed signatures
     revokedAt: time(),
     revokedBy: ref(true),
+    serverSeq: { type: DataTypes.BIGINT.UNSIGNED, allowNull: true }, // the business's sync sequence number (BE5)
     createdAt: time(false),
     updatedAt: time(false),
   }, common);
@@ -158,6 +162,37 @@ function defineModels(sequelize) {
     createdAt: time(false),
   }, { freezeTableName: true, timestamps: true, updatedAt: false });
 
+  // Sync bookkeeping (BE5 Part B). SyncSequence is touched ONLY by
+  // src/sync/runOperation.js (a test checks it).
+  const SyncSequence = sequelize.define('SyncSequence', {
+    businessId: { type: DataTypes.CHAR(36), primaryKey: true },
+    lastSeq: { type: DataTypes.BIGINT.UNSIGNED, allowNull: false, defaultValue: 0 },
+  }, { freezeTableName: true, timestamps: false });
+
+  // The outcome of every pushed operation, stored with its effect.
+  const ProcessedOperation = sequelize.define('ProcessedOperation', {
+    businessId: { type: DataTypes.CHAR(36), primaryKey: true },
+    opId: { type: DataTypes.CHAR(36), primaryKey: true },
+    deviceId: ref(),
+    userId: ref(),
+    type: { type: DataTypes.STRING(40), allowNull: false },
+    payloadHash: { type: DataTypes.CHAR(64), allowNull: false },
+    status: { type: DataTypes.ENUM('pending', 'saved', 'rejected'), allowNull: false },
+    errorCode: { type: DataTypes.STRING(40), allowNull: true },
+    resultJson: { type: DataTypes.JSON, allowNull: true },
+    processedAt: time(false),
+  }, { freezeTableName: true, timestamps: false });
+
+  // The receipt registry (used from BE8).
+  const ReceiptNumber = sequelize.define('ReceiptNumber', {
+    businessId: { type: DataTypes.CHAR(36), primaryKey: true },
+    receiptNumber: { type: DataTypes.STRING(20), primaryKey: true },
+    recordType: { type: DataTypes.ENUM('sale', 'correction', 'repayment'), allowNull: false },
+    recordId: ref(),
+    deviceId: ref(),
+    createdAt: time(false),
+  }, { freezeTableName: true, timestamps: true, updatedAt: false });
+
   // Associations used to read a person's businesses with their names, and a
   // business's members with their accounts.
   Membership.belongsTo(Business, { foreignKey: 'businessId', as: 'business' });
@@ -167,18 +202,21 @@ function defineModels(sequelize) {
 
   return {
     User, Business, BusinessSettings, Location, Membership, EmailToken, ChangeLog,
-    Device, DeviceRequestNonce, DeviceChallenge,
+    Device, DeviceRequestNonce, DeviceChallenge, SyncSequence, ProcessedOperation, ReceiptNumber,
   };
 }
 
 // The models holding ONE business's data (they have a businessId column).
 // Route handlers reach them only through scoped() (src/services/scoped.js);
 // a test fails the build otherwise. Every later business table joins this list.
-const BUSINESS_MODELS = ['BusinessSettings', 'Location', 'Membership', 'ChangeLog', 'Device', 'DeviceRequestNonce', 'DeviceChallenge'];
+const BUSINESS_MODELS = ['BusinessSettings', 'Location', 'Membership', 'ChangeLog', 'Device', 'DeviceRequestNonce', 'DeviceChallenge', 'ProcessedOperation', 'ReceiptNumber'];
+
+// The tables phones pull (each row has a serverSeq), and the pull row type of each.
+const SYNCED_MODELS = { BusinessSettings: 'settings', Location: 'location', Membership: 'membership', Device: 'device' };
 
 // Permanent records (sales, repayments, stock movements…): never updated or
 // deleted. Empty until BE7/BE8 add the first ones; scoped().update refuses
 // every model listed here.
 const PERMANENT_MODELS = [];
 
-module.exports = { defineModels, BUSINESS_MODELS, PERMANENT_MODELS };
+module.exports = { defineModels, BUSINESS_MODELS, PERMANENT_MODELS, SYNCED_MODELS };

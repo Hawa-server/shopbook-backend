@@ -6,6 +6,7 @@
 const { AppError } = require('../lib/errors');
 const locale = require('../locale');
 const { recordChange } = require('./changeLog');
+const { stampSequence } = require('../sync/runOperation');
 
 // Changes a business's country, currency and/or time zone, inside
 // `transaction`, and records it in the ChangeLog. Refused with 409
@@ -35,12 +36,15 @@ async function updateLocale(models, transaction, { businessId, changedBy, now, c
 
   const before = { country: business.country, currency: business.currency, timezone: business.timezone };
   await business.update(next, { transaction });
-  if (changes.country && changes.country !== before.country) {
+  const countryChanged = Boolean(changes.country && changes.country !== before.country);
+  if (countryChanged) {
     await models.BusinessSettings.update({ paymentMethods: [...rules.paymentMethods] }, { where: { businessId }, transaction });
   }
   await recordChange(models, transaction, {
     businessId, entity: 'business', entityId: businessId, changedBy, changedAt: now, before, after: next,
   });
+  // The settings row changed (payment methods): phones must pull it again. Last step.
+  if (countryChanged) await stampSequence(models, transaction, businessId, [{ model: 'BusinessSettings', where: {} }]);
   return business;
 }
 

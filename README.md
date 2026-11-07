@@ -25,9 +25,10 @@ The API for Shop Book, an offline-first bookkeeping app for market traders: Expr
 | `npm run db:migrate` / `db:migrate:status` / `db:migrate:undo` | Migrations on the development database (`.env`) |
 | `npm run db:migrate:test` | Migrations on the test database (`.env.test`) |
 | `npm run test:isolation` | The business isolation tests on their own |
+| `npm run check:sequences` / `check:operations` | Read-only consistency checks of sync on the development database; print any problem (IDs only) and exit 1, change nothing |
 | `npm run dev:sign -- …` | Signs test requests with a throwaway test key (development only; see `docs/guide.md`) |
 
-Consistency checks (`check:balances`, `check:stock`, `check:receipts`, `check:sequences`, `check:operations`) arrive with the tasks that need them (BE5 onwards).
+`check:sequences` and `check:operations` exist since BE5; `check:balances`, `check:stock` and `check:receipts` arrive with their tasks. On production they're run only by the project owner: `node --env-file=.env.production scripts/check.js sequences` (read-only).
 
 ## Deployment
 

@@ -12,6 +12,8 @@
     "dev": "node --env-file=.env --watch src/server.js",
     "test": "npm run check:api-docs && node --env-file-if-exists=.env.test node_modules/jest/bin/jest.js --runInBand",
     "check:api-docs": "node scripts/check-api-docs.js",
+    "check:sequences": "node --env-file=.env scripts/check.js sequences",
+    "check:operations": "node --env-file=.env scripts/check.js operations",
     "dev:sign": "node scripts/dev-sign.js",
     "test:isolation": "node --env-file-if-exists=.env.test node_modules/jest/bin/jest.js --runInBand tests/isolation",
     "db:migrate": "node --env-file=.env node_modules/sequelize-cli/lib/sequelize db:migrate",

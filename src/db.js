@@ -60,6 +60,14 @@ async function runTransaction(fn, { retries = 3, wait = (ms) => new Promise((r) 
   }
 }
 
+// Runs `fn` inside a SAVEPOINT of an open transaction: if `fn` throws, only
+// what it wrote since the savepoint is undone, and the outer transaction goes
+// on. runOperation uses it so a rejected operation's partial writes vanish
+// while its rejection is still stored in the same transaction.
+function withSavepoint(transaction, fn) {
+  return getSequelize().transaction({ transaction }, (savepoint) => fn(savepoint));
+}
+
 // Answers true if MySQL replies to `SELECT 1` within `timeoutMs`, else false.
 // Never throws and never returns the error itself: health answers only
 // "ok" or "down", so hostnames and error messages can't leak.
@@ -87,4 +95,4 @@ async function closeDatabase() {
   }
 }
 
-module.exports = { getSequelize, getModels, runTransaction, isRetryableLockError, checkDatabase, closeDatabase };
+module.exports = { getSequelize, getModels, runTransaction, withSavepoint, isRetryableLockError, checkDatabase, closeDatabase };
