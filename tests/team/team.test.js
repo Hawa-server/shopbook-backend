@@ -36,6 +36,7 @@ async function readyStaff(o, role = 'associate') {
   const { res, phone, password } = await addStaff(o, role);
   const { agent } = await signInAgent(ctx.app, ctx.config, phone, password);
   await agent.post('/api/auth/change-password').set(XHR).send({ currentPassword: password, newPassword: 'my-own-pass-2026' });
+  agent.setPassword('my-own-pass-2026');
   await agent.post('/api/auth/accept-terms').set(XHR).send({ version: '1' });
   return { agent, phone, password: 'my-own-pass-2026', membershipId: res.body.member.membershipId };
 }
@@ -79,8 +80,8 @@ describe('adding a new staff member', () => {
     const user = await db.getModels().User.findOne({ where: { phone: `+233${phone.slice(1)}` } });
     expect(user.passwordHash).toMatch(/^\$argon2id\$/);
     expect(user.passwordHash).not.toContain(temp);
-    const changes = await db.getModels().ChangeLog.findAll({ where: { businessId: o.businessId } });
-    expect(changes).toHaveLength(1);
+    const changes = await db.getModels().ChangeLog.findAll({ where: { businessId: o.businessId, entity: 'membership' } });
+    expect(changes).toHaveLength(1); // (the owner's phone registration is a separate 'device' row)
     expect(JSON.stringify(changes)).not.toContain(temp);
     expect(ctx.lines.join('\n')).not.toContain(temp);
   });
@@ -93,6 +94,7 @@ describe('adding a new staff member', () => {
 
     expect((await agent.get('/api/team').set(biz(o.businessId))).body.error.code).toBe('PASSWORD_CHANGE_REQUIRED');
     await agent.post('/api/auth/change-password').set(XHR).send({ currentPassword: password, newPassword: 'my-own-pass-2026' });
+    agent.setPassword('my-own-pass-2026');
     expect((await agent.get('/api/team').set(biz(o.businessId))).body.error.code).toBe('TERMS_REQUIRED');
     await agent.post('/api/auth/accept-terms').set(XHR).send({ version: '1' });
     const res = await agent.get('/api/team').set(biz(o.businessId));

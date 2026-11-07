@@ -24,6 +24,8 @@ The API for Shop Book, an offline-first bookkeeping app for market traders: Expr
 | `npm run check:api-docs` | Checks that `docs/api.md` lists exactly the server's routes |
 | `npm run db:migrate` / `db:migrate:status` / `db:migrate:undo` | Migrations on the development database (`.env`) |
 | `npm run db:migrate:test` | Migrations on the test database (`.env.test`) |
+| `npm run test:isolation` | The business isolation tests on their own |
+| `npm run dev:sign -- …` | Signs test requests with a throwaway test key (development only; see `docs/guide.md`) |
 
 Consistency checks (`check:balances`, `check:stock`, `check:receipts`, `check:sequences`, `check:operations`) arrive with the tasks that need them (BE5 onwards).
 

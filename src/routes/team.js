@@ -20,6 +20,8 @@ const { normalizePhone } = require('../lib/phone');
 const { hashPassword, generateTemporaryPassword } = require('../lib/passwords');
 const { requireSession } = require('../lib/session');
 const { requireAuth, requireRole } = require('../middleware/requireAuth');
+const { requireDevice } = require('../middleware/requireDevice');
+const devices = require('../services/devices');
 const { scoped } = require('../services/scoped');
 const { updateUser } = require('../services/users');
 const accounts = require('../services/accounts');
@@ -278,6 +280,10 @@ function removeMember(deps) {
       await logChange(s, transaction, {
         membershipId: m.id, changedBy: req.user.id, changedAt: now, before: { status: statusOf(m), role: m.role }, after: { status: 'removed' },
       });
+      // Their phones for THIS business are revoked in the same transaction.
+      await devices.revokeDevices(models, transaction, {
+        businessId: req.business.id, where: { userId: m.userId }, revokedBy: req.user.id, now,
+      });
       return findMemberOrNotFound(s, models, m.id, transaction);
     });
     res.json({ member: memberView(member) });
@@ -286,15 +292,16 @@ function removeMember(deps) {
 
 // ---- Route table ----------------------------------------------------------
 
-// Every team route: signed in, business chosen by X-Business, owner only.
-const ownerOnly = (d) => [requireSession(d), requireAuth(d), requireRole('owner')];
+// Every team route: signed in, business chosen by X-Business, signed by a
+// registered phone, owner only.
+const ownerOnly = (d) => [requireSession(d), requireAuth(d), requireDevice(d), requireRole('owner')];
 
 const teamRoutes = [
-  { method: 'GET', path: '/api/team', business: true, build: (d) => [...ownerOnly(d), listTeam(d)] },
-  { method: 'POST', path: '/api/team', business: true, build: (d) => [...ownerOnly(d), addMember(d)] },
-  { method: 'PATCH', path: '/api/team/:membershipId', business: true, build: (d) => [...ownerOnly(d), changeRole(d)] },
-  { method: 'POST', path: '/api/team/:membershipId/reset-password', business: true, build: (d) => [...ownerOnly(d), resetPassword(d)] },
-  { method: 'DELETE', path: '/api/team/:membershipId', business: true, build: (d) => [...ownerOnly(d), removeMember(d)] },
+  { method: 'GET', path: '/api/team', business: true, signed: true, build: (d) => [...ownerOnly(d), listTeam(d)] },
+  { method: 'POST', path: '/api/team', business: true, signed: true, build: (d) => [...ownerOnly(d), addMember(d)] },
+  { method: 'PATCH', path: '/api/team/:membershipId', business: true, signed: true, build: (d) => [...ownerOnly(d), changeRole(d)] },
+  { method: 'POST', path: '/api/team/:membershipId/reset-password', business: true, signed: true, build: (d) => [...ownerOnly(d), resetPassword(d)] },
+  { method: 'DELETE', path: '/api/team/:membershipId', business: true, signed: true, build: (d) => [...ownerOnly(d), removeMember(d)] },
 ];
 
 module.exports = { teamRoutes, memberView, statusOf };

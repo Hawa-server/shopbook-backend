@@ -9,11 +9,23 @@
 // - each entry says which table and why;
 // - adding anything to this list needs the project owner's OK (a test lists
 //   exactly what's allowed, so a change can't slip in unnoticed).
-//
-// Empty for now. In BE5 the nonce clean-up joins it: each signed request
-// deletes that device's expired DeviceRequestNonce rows (server plan,
-// "Nonce timing"), so no background job is needed.
 
-const HOUSEKEEPING_DELETES = Object.freeze([]);
+const { Op } = require('sequelize');
 
-module.exports = { HOUSEKEEPING_DELETES };
+const HOUSEKEEPING_DELETES = Object.freeze([
+  Object.freeze({
+    table: 'DeviceRequestNonce',
+    why: "Each signed request deletes that device's expired one-time numbers (server plan, \"Nonce timing\"), so no background job is needed. Approved by the owner for BE5.",
+  }),
+]);
+
+// Deletes ONE device's expired nonces (they're useless after 10 minutes),
+// inside `transaction`. Nothing else is ever deleted here.
+function deleteExpiredNonces(models, transaction, { businessId, deviceId, now }) {
+  return models.DeviceRequestNonce.destroy({
+    where: { businessId, deviceId, expiresAt: { [Op.lt]: now } },
+    transaction,
+  });
+}
+
+module.exports = { HOUSEKEEPING_DELETES, deleteExpiredNonces };

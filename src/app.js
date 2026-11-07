@@ -57,6 +57,10 @@ function createApp({
   // browsers' preflight (OPTIONS) requests are answered; the body is read
   // (with a 1 MB limit; a 200-operation push fits easily) before routes.
   app.use(requestId);
+  // X-Server-Time on every response (milliseconds since 1970, the server's
+  // clock): phones keep the difference from their own clock and sign with
+  // server-corrected time, so a phone set to the wrong day still signs right.
+  app.use((req, res, next) => { res.set('X-Server-Time', String(now())); next(); });
   app.use(requestLog({ logger, logProxyChain: config.LOG_PROXY_CHAIN }));
   app.use(securityHeaders({ isProduction: config.isProduction }));
   app.use(corsMiddleware(config));

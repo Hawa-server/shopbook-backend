@@ -9,16 +9,16 @@ const { allowedOrigins } = require('./allowedOrigins');
 
 // Makes the CORS middleware. For an origin not on the list it simply sends no
 // CORS headers, so the browser keeps the answer from that site's script.
-// Later tasks add their request headers here (the signing headers in BE5)
-// and X-Server-Time to the exposed headers.
+// It allows the app's own request headers (X-Business, the four signing
+// headers) and lets it read X-Request-Id and X-Server-Time.
 function corsMiddleware(config) {
   const origins = allowedOrigins(config);
   return cors({
     origin: (origin, callback) => callback(null, origin !== undefined && origins.has(origin)),
     credentials: true, // the session cookie (BE2) is sent with requests
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
-    allowedHeaders: ['Content-Type', 'X-Requested-With', 'X-Business'],
-    exposedHeaders: ['X-Request-Id'],
+    allowedHeaders: ['Content-Type', 'X-Requested-With', 'X-Business', 'X-Device-Id', 'X-Signed-At', 'X-Nonce', 'X-Signature'],
+    exposedHeaders: ['X-Request-Id', 'X-Server-Time'],
     maxAge: 600,
   });
 }

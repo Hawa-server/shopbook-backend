@@ -8,6 +8,7 @@ The contract between the Shop Book server and the phone app. **The app uses only
 
 Newest first.
 
+- **BE5 Part A (Phones and signed requests):** **every business endpoint is now signed** with the phone's own key (four headers: `X-Device-Id`, `X-Signed-At`, `X-Nonce`, `X-Signature`; exact text in Conventions), except the two registration endpoints. Every response carries **`X-Server-Time`**. New endpoints: `POST /api/devices/challenge`, `POST /api/devices` (register this phone: password + signed challenge), `GET /api/devices`, `DELETE /api/devices/:deviceId` (owner). Removing a member now also revokes their phones for that business. New error codes: `DEVICE_NOT_REGISTERED`, `DEVICE_REVOKED`, `DEVICE_SIGNATURE_INVALID`, `CLOCK_OUT_OF_RANGE`, `NONCE_REUSED`, `CHALLENGE_INVALID`, `DEVICE_KEY_INVALID`, `DEVICE_ID_TAKEN`, `DEVICE_ALREADY_REVOKED`; `RATE_LIMITED` also when a phone is locked after failed signatures.
 - **BE4.5 (International-ready, Ghana first):** money is described in **minor units** of the business's currency (field names end in `Minor`; GHS has 2 decimals, so `12000` = GH₵ 120.00): format it with the business's `currency` rules, not `Intl.NumberFormat`. Phone numbers are **E.164** (`+233…`). Business dates use the **business's time zone**. `language` is an open list of supported tags (launch `en`, `tw`) from the new **`GET /api/reference`** (countries, currencies, languages, payment methods with their names: mobile money is "MoMo" in Ghana). `me.businesses[]` gains `country`, `currency`, `timezone`, `defaultLanguage`, `paymentMethods`, `localeLocked`. Sign-up takes an optional `country` (default `GH`, the only one at launch); sign-in, forgot password and change phone take an optional `country` for reading local numbers. New endpoint `PATCH /api/business/locale` (owner) and error `409 CURRENCY_LOCKED`. The phone `VALIDATION_FAILED` message is now "Enter a valid mobile number, for example 024 123 4567."
 - **BE4 (Isolation):** no change to any endpoint. Tests now prove that every business endpoint answers another business's IDs exactly like unknown ones (`404 NOT_FOUND`, same body), and the database refuses cross-business references.
 - **BE3 (Team):** the **`X-Business` header** (required on every business endpoint), the team endpoints (`GET`/`POST /api/team`, `PATCH`/`DELETE /api/team/:membershipId`, `POST /api/team/:membershipId/reset-password`), **invitations** for people who already have an account (`me.invitations`, `POST /api/auth/invitations/:membershipId/accept` and `…/decline`). `PASSWORD_CHANGE_REQUIRED` now also applies to `confirm-email/send`, `me/phone`, `me/email`. New error codes: `BUSINESS_REQUIRED`, `ACCESS_REMOVED`, `BUSINESS_CLOSING`, `FORBIDDEN`, `PASSWORD_CHANGE_REQUIRED`, `ALREADY_MEMBER`, `ALREADY_INVITED`, `MEMBER_REMOVED`, `OWNER_CANNOT_CHANGE`, `RESET_NOT_ALLOWED`. New enum: member `status`.
@@ -52,6 +53,52 @@ Sign-up, sign-in, forgot password and reset password must come from the app itse
 |---|---|---|
 | `X-Request-Id` | Every response | A UUID for this request. Keep the one from the **last failed** request: the Help message ("Report a problem") includes it, and it's the same reference a 500 error shows. |
 | `Cache-Control: no-store` | Every `/api` response | Don't cache API answers (the service worker must never cache `/api`). |
+| `X-Server-Time` | Every response | The server's clock, integer milliseconds since 1970 (UTC). Keep `offset = X-Server-Time − Date.now()` (update it from every response) and sign with `Date.now() + offset`, so a phone set to the wrong time still signs correctly. |
+
+### Phones and signed requests
+
+Each phone registers **once per business** it works in (the real business and its practice shop are two registrations, with two device codes and two receipt counters), with its **own key pair**:
+
+1. Make the key with Web Crypto: `crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, false, ["sign", "verify"])`. The private key is **not extractable**; keep the `CryptoKey` in that business's local database. Make a new device ID with `crypto.randomUUID()`.
+2. `POST /api/devices/challenge` → `{ challenge }`.
+3. Sign the challenge **text** (its UTF-8 bytes) with the private key, and `POST /api/devices` with the device ID, a name, the public key (`exportKey("jwk", publicKey)`: `kty`, `crv`, `x`, `y`), the challenge, its signature and the person's current password. Keep the returned `deviceCode` (it starts every receipt number, e.g. `K7M-0042`).
+
+From then on **every business endpoint is signed** (each endpoint below says "Signed: yes"). Add these four headers to the request:
+
+| Header | Value |
+|---|---|
+| `X-Device-Id` | This phone's device ID for this business (lowercase UUID). |
+| `X-Signed-At` | Server-corrected time: `Date.now() + offset`, integer milliseconds. |
+| `X-Nonce` | 16 random bytes (`crypto.getRandomValues`) in base64url (22 characters). A new one for **every** request, retries included. |
+| `X-Signature` | The signature, base64url. |
+
+**The exact text that is signed:** these seven items, each on its own line, joined with `\n` (no trailing newline), as UTF-8:
+
+1. the method in capitals (`GET`, `POST`, `PATCH`, `DELETE`);
+2. the path **and query string exactly as sent** (no decoding, no re-ordering), e.g. `/api/sync/pull?since=120&limit=500`;
+3. the SHA-256 of the **exact body bytes sent**, lowercase hex (for no body, the hash of zero bytes: `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`). Turn the body into a string **once**, hash that string and send that same string;
+4. the device ID (lowercase);
+5. the business ID (lowercase, the same as `X-Business`);
+6. the `X-Signed-At` value;
+7. the `X-Nonce` value.
+
+Sign it with `crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, privateKey, bytes)` (that gives the 64-byte IEEE P1363 form the server expects) and send it base64url (no padding).
+
+Example (made-up values) for `GET /api/devices`:
+
+```text
+GET
+/api/devices
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+3f1c2a9e-6b7d-4c1e-9a2b-0d4e5f6a7b8c
+8a0b1c2d-3e4f-4a5b-8c6d-7e8f9a0b1c2d
+1794045600000
+q9X2bY7mL0pQ4sTvW1zR3A
+```
+
+The server checks, after the sign-in and the business (`X-Business`): the device is this person's in this business and active, the time is within 5 minutes of its clock, the signature, and that the nonce is new. **What to do with each answer:** see `DEVICE_NOT_REGISTERED`, `DEVICE_REVOKED`, `DEVICE_SIGNATURE_INVALID`, `CLOCK_OUT_OF_RANGE` and `NONCE_REUSED` in Errors.
+
+**Honest limits** (say so in Help, don't over-promise): the key can't be copied off the phone, so a stolen sign-in cookie is useless elsewhere. It does **not** stop malicious script inside the app from using the key; the app's strict Content-Security-Policy is what prevents that.
 
 ### Data formats
 
@@ -94,7 +141,7 @@ Decide what to do from **`code`** (stable), never from `message` (wording may ch
 | `INVALID_JSON` | 400 | The body isn't valid JSON. | App bug; don't retry. |
 | `INVALID_REQUEST` | 400 | The body couldn't be read (unsupported encoding or character set). | App bug; don't retry. |
 | `PAYLOAD_TOO_LARGE` | 413 | The body is over 1 MB. | Send smaller batches (sync pushes stay well under it at 200 operations). |
-| `RATE_LIMITED` | 429 | Too many requests of this kind. `Retry-After` says how many seconds to wait. | Wait and retry later; show a message only if it's a person's action (for example sign-in). |
+| `RATE_LIMITED` | 429 | Too many requests of this kind, or this phone is **locked for 15 minutes** after 20 failed signatures in 15 minutes (the owner sees it in the phone list). `Retry-After` says how many seconds to wait. | Wait and retry later; show a message only if it's a person's action (for example sign-in). |
 | `VALIDATION_FAILED` | 400 | One or more fields are missing or wrong. `fields` maps each field name to a message (e.g. `{ "phone": "Enter a valid mobile number, for example 024 123 4567." }`). | Show each message under its field (translate by field and context); let the person correct it. Don't retry unchanged. |
 | `ORIGIN_REQUIRED` | 403 | An account endpoint (sign-up, sign-in, forgot/reset password) was called without the browser's `Origin` header. | Shouldn't happen from the app (browsers send it). Report via Help. |
 | `NOT_SIGNED_IN` | 401 | No sign-in, or it has ended (30 days unused, 90 days old, password/phone/email changed elsewhere, or signed out). | **Keep all local data and the outbox.** Show the sign-in screen when online; selling continues offline meanwhile. |
@@ -119,6 +166,15 @@ Decide what to do from **`code`** (stable), never from `message` (wording may ch
 | `OWNER_CANNOT_CHANGE` | 409 | The owner's own membership can't be changed, removed or reset from the team screen. | Don't offer these actions on the owner's row. |
 | `RESET_NOT_ALLOWED` | 403 | The owner tried to reset the password of someone who also belongs to another business. | Show "This person also uses Shop Book with another business. They can reset their password by email, or ask for help." |
 | `CURRENCY_LOCKED` | 409 | The business already has money records, so its country, currency and time zone can't change. | Show "These can't change once money has been recorded." Hide the edit once `localeLocked` is `true`. |
+| `DEVICE_NOT_REGISTERED` | 403 | This phone isn't registered for this person in this business (no or unknown `X-Device-Id`, storage cleared, reinstalled). | Register this phone again (`POST /api/devices/challenge`, then `POST /api/devices`, asking for the password), then repeat the request. Keep the outbox. |
+| `DEVICE_REVOKED` | 403 | The owner removed this phone (lost or stolen), or the person was removed from the business. | **Wipe that business's local database** (outbox included) and explain "This phone was removed from [business]". The person can sign in and register again on a new phone (a new device). |
+| `DEVICE_SIGNATURE_INVALID` | 401 | The signature doesn't match (wrong key, or the request changed after signing). | App bug or a lost key: re-check how the text is built. If the key is gone (storage cleared), register again. Don't retry the same request unchanged. |
+| `CLOCK_OUT_OF_RANGE` | 401 | `X-Signed-At` is more than 5 minutes from the server's clock. | Update the offset from this answer's `X-Server-Time` and retry **once** with a new nonce. |
+| `NONCE_REUSED` | 401 | This nonce was already used (a replayed or duplicated request). | Retry with a new nonce (the operation itself is safe to retry: `opId` stops duplicates). |
+| `CHALLENGE_INVALID` | 400 | Registering: the challenge is unknown, already used or older than 5 minutes. | Ask for a new challenge and register again. |
+| `DEVICE_KEY_INVALID` | 400 | Registering: the public key isn't a valid P-256 key, or the challenge wasn't signed by it. | App bug: re-check the key export and the signature. |
+| `DEVICE_ID_TAKEN` | 409 | Registering: this device ID is already registered (a phone never swaps its key). | Make a **new** device ID (and key) and register again. |
+| `DEVICE_ALREADY_REVOKED` | 409 | The owner tried to revoke a phone that's already revoked. | Refresh the phone list. |
 | `INTERNAL_ERROR` | 500 | Something unexpected went wrong on the server. `message` is "Something went wrong. Reference: \<request id\>". | **Temporary:** keep any unsent records and retry later. Keep the reference (also in `X-Request-Id`) for the Help message. |
 
 Other failures without the error format:
@@ -129,9 +185,9 @@ Other failures without the error format:
 
 ## Endpoints
 
-Grouped by area as they arrive (accounts, devices, team, sync, reports, export, business, practice). Each endpoint heading is `### METHOD /path`. "Signed" means signed with the device key: from BE5 **every business endpoint** (those needing `X-Business`) must be signed; until then none is.
+Grouped by area as they arrive (accounts, devices, team, sync, reports, export, business, practice). Each endpoint heading is `### METHOD /path`. "Signed" means signed with the device key (see Conventions, "Phones and signed requests"): **every business endpoint** (those needing `X-Business`) is signed, except `POST /api/devices/challenge` and `POST /api/devices`.
 
-**Every business endpoint** can also answer, before anything else: `401 NOT_SIGNED_IN`, `400 BUSINESS_REQUIRED`, `404 NOT_FOUND` (not a member of that business), `403 ACCESS_REMOVED`, `403 BUSINESS_CLOSING`, `403 PASSWORD_CHANGE_REQUIRED`, `403 TERMS_REQUIRED`, and `403 FORBIDDEN` (role not allowed).
+**Every business endpoint** can also answer, before anything else and in this order: `401 NOT_SIGNED_IN`, `400 BUSINESS_REQUIRED`, `404 NOT_FOUND` (not a member of that business), `403 ACCESS_REMOVED`, `403 BUSINESS_CLOSING`, `403 PASSWORD_CHANGE_REQUIRED`, `403 TERMS_REQUIRED`; then, for signed endpoints, `403 DEVICE_NOT_REGISTERED`, `403 DEVICE_REVOKED`, `429 RATE_LIMITED` (phone locked after failed signatures), `401 CLOCK_OUT_OF_RANGE`, `401 DEVICE_SIGNATURE_INVALID`, `401 NONCE_REUSED`; then `403 FORBIDDEN` (role not allowed).
 
 ### GET /api/health
 
@@ -198,11 +254,86 @@ The supported countries, currencies, languages and payment methods, with the nam
 
 The owner changes the business's country, currency or time zone. Only possible until the business has its first money record (`localeLocked`); after that, `409 CURRENCY_LOCKED`. At launch the only valid values are `GH`, `GHS` and `Africa/Accra`, so the app needn't offer this screen yet.
 
-- **Who:** owner. **Business:** yes (`X-Business`). **Signed:** not yet (from BE5).
+- **Who:** owner. **Business:** yes (`X-Business`). **Signed:** yes.
 - **Request:** `{ "country": "GH", "currency": "GHS", "timezone": "Africa/Accra" }`: at least one. Changing `country` alone also resets the currency, time zone and payment methods to that country's.
 - **Response 200:** `{ "country": "GH", "currency": { "code": "GHS", "…": "…" }, "timezone": "Africa/Accra", "localeLocked": false }`. Refresh `GET /api/auth/me` afterwards.
 - **Errors:** `409 CURRENCY_LOCKED`, `400 VALIDATION_FAILED` (`fields.country`: not supported; `fields.currency`: not supported; `fields.timezone`: not one of the country's time zones; or nothing to change), plus the business-endpoint errors.
 - **Rate limit:** none. **Available since:** BE4.5.
+
+---
+
+## Phones (devices)
+
+### POST /api/devices/challenge
+
+Step 2 of registering this phone: a one-time challenge to sign with the phone's new private key.
+
+- **Who:** signed in, a member of the business (own password chosen, terms accepted). **Business:** yes (`X-Business`). **Signed:** no (the phone has no registered key yet).
+- **Request:** no body.
+- **Response 200:** `{ "challenge": "kM3x…(43 characters)", "expiresAt": "2026-11-08T10:05:00.000Z" }`. Valid **5 minutes**, usable **once**.
+- **Errors:** `429 RATE_LIMITED`, plus the business-endpoint errors before the signature.
+- **Rate limit:** 20 per hour per person. **Available since:** BE5.
+
+### POST /api/devices
+
+Step 3: registers this phone for this business. The owner is emailed ("A new phone, [name], was added to [business] by [person]"). On a new phone, sign-in and registration happen together, so reuse the password just typed (don't ask twice and don't keep it); registering later (after storage was cleared) asks for it again.
+
+- **Who:** signed in, a member of the business. **Business:** yes. **Signed:** no.
+- **Request:**
+
+  ```json
+  {
+    "deviceId": "3f1c2a9e-6b7d-4c1e-9a2b-0d4e5f6a7b8c",
+    "name": "Ama's Tecno",
+    "publicKey": { "kty": "EC", "crv": "P-256", "x": "…", "y": "…" },
+    "challenge": "kM3x…",
+    "challengeSignature": "…(base64url)…",
+    "currentPassword": "…"
+  }
+  ```
+
+| Field | Rules |
+|---|---|
+| `deviceId` | A new UUID made on this phone (`crypto.randomUUID()`), one per business. |
+| `name` | 1–60 characters, shown in the owner's phone list (e.g. the phone's model). |
+| `publicKey` | The public key as JWK (`kty: "EC"`, `crv: "P-256"`, `x`, `y`). Never the private key. |
+| `challenge` | From `POST /api/devices/challenge`. |
+| `challengeSignature` | The challenge **text** (UTF-8) signed with the private key, base64url (64-byte P1363 form, what Web Crypto gives). |
+| `currentPassword` | The person's password (proves a stolen cookie alone can't add a key). |
+
+- **Response 201:** `{ "device": { "deviceId": "3f1c…", "deviceCode": "K7M", "name": "Ama's Tecno" } }`. Save `deviceCode` for receipt numbers (`K7M-0001`, `K7M-0002`…; one counter per business on this phone).
+- **Errors:** `400 WRONG_PASSWORD`, `400 CHALLENGE_INVALID`, `400 DEVICE_KEY_INVALID`, `409 DEVICE_ID_TAKEN`, `400 VALIDATION_FAILED`, `429 RATE_LIMITED`, plus the business-endpoint errors before the signature.
+- **Rate limit:** 5 per hour per person and per IP address; a wrong password also counts towards the sign-in limit. **Available since:** BE5.
+
+### GET /api/devices
+
+The owner's list of the business's phones (More → Phones), active and revoked.
+
+- **Who:** owner. **Business:** yes. **Signed:** yes.
+- **Response 200:**
+
+  ```json
+  {
+    "devices": [{
+      "deviceId": "3f1c2a9e-6b7d-4c1e-9a2b-0d4e5f6a7b8c", "deviceCode": "K7M", "name": "Ama's Tecno",
+      "person": { "userId": "8c7b…", "name": "Ama Mensah" },
+      "isActive": true, "lastSeenAt": "2026-11-08T09:58:00.000Z", "lastSyncAt": null,
+      "lockedUntil": null, "registeredAt": "2026-11-01T08:00:00.000Z", "revokedAt": null
+    }]
+  }
+  ```
+
+  `lastSeenAt` is updated at most every 5 minutes. `lockedUntil` (time or null): the phone is blocked until then after too many failed signatures; show "Blocked after failed checks". `lastSyncAt` is filled from BE5 Part B.
+- **Errors:** the business-endpoint errors. **Rate limit:** none. **Available since:** BE5.
+
+### DELETE /api/devices/:deviceId
+
+Revokes a phone (lost or stolen). Its next request gets `403 DEVICE_REVOKED` and it wipes this business's data; a phone that stays offline can only be wiped when it next connects. The person can sign in on another phone and register it (a new device, new code). A revoked phone is never reactivated.
+
+- **Who:** owner. **Business:** yes. **Signed:** yes.
+- **Response 200:** `{ "device": device }` with `isActive: false`.
+- **Errors:** `404 NOT_FOUND` (not a phone of this business), `409 DEVICE_ALREADY_REVOKED`, plus the business-endpoint errors.
+- **Rate limit:** none. **Available since:** BE5.
 
 ---
 
@@ -483,7 +614,7 @@ Declines an invitation. The owner sees "Declined" and may invite again later.
 
 ## Team
 
-All team endpoints are **owner only** business endpoints: signed in, `X-Business` required, and the person must be that business's owner (others get `403 FORBIDDEN`). **Signed:** not yet; from BE5 they must be signed like every business endpoint.
+All team endpoints are **owner only** business endpoints: signed in, `X-Business` required, and the person must be that business's owner (others get `403 FORBIDDEN`). **Signed:** yes.
 
 ### The `member` object
 
@@ -581,7 +712,7 @@ For a staff member who forgot their password and has no confirmed email (AC34): 
 
 ### DELETE /api/team/:membershipId
 
-Removes a member from **this** business, or cancels a pending invitation. **Their access to this business ends at once:** their very next request for it answers `403 ACCESS_REMOVED`, and their phone then wipes this business's local data. They stay signed in for any other business they belong to. Nothing they recorded is changed or lost. **From BE5, removing someone also revokes their phones for this business.**
+Removes a member from **this** business, or cancels a pending invitation. **Their access to this business ends at once:** their very next request for it answers `403 ACCESS_REMOVED`, and their phone then wipes this business's local data. They stay signed in for any other business they belong to. Nothing they recorded is changed or lost. **Removing someone also revokes their phones for this business** (in the same step; their device codes are never reused).
 
 - **Request:** no body.
 - **Response 200:** `{ "member": member }` (status `removed`).

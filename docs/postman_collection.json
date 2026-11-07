@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "Shop Book API",
-    "description": "Manual tests for the Shop Book server, following docs/api.md. Set the collection variable baseUrl (default http://localhost:3000). Run the server with `npm run dev` first. Postman keeps the session cookie between requests, like a phone's browser. In development, every email (with its link) is printed in the server's terminal: copy the token from the link into the `token` variable for the confirm and reset requests.",
+    "description": "Manual tests for the Shop Book server, following docs/api.md. Set the collection variable baseUrl (default http://localhost:3000). Run the server with `npm run dev` first. Postman keeps the session cookie between requests, like a phone's browser. In development, every email (with its link) is printed in the server's terminal: copy the token from the link into the `token` variable for the confirm and reset requests. From BE5 every business endpoint (X-Business) must be SIGNED by a registered phone: use `npm run dev:sign` (see docs/guide.md, 'Trying signed endpoints yourself') to register a test key and to make the four signing headers (X-Device-Id, X-Signed-At, X-Nonce, X-Signature) for each request.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
@@ -894,6 +894,101 @@
               "script": {
                 "exec": [
                   "pm.test('status 200 (or 409 CURRENCY_LOCKED once money exists)', () => pm.expect([200, 409]).to.include(pm.response.code));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "BE5 Phones (registration, signed requests)",
+      "item": [
+        {
+          "name": "POST /api/devices/challenge",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/devices/challenge",
+            "header": [
+              {
+                "key": "X-Requested-With",
+                "value": "XMLHttpRequest"
+              },
+              {
+                "key": "X-Business",
+                "value": "{{businessId}}"
+              }
+            ]
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.collectionVariables.set('challenge', pm.response.json().challenge);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /api/devices (body from: npm run dev:sign -- register-body --challenge {{challenge}})",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/devices",
+            "header": [
+              {
+                "key": "X-Requested-With",
+                "value": "XMLHttpRequest"
+              },
+              {
+                "key": "X-Business",
+                "value": "{{businessId}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "paste the output of npm run dev:sign -- register-body here"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 201', () => pm.response.to.have.status(201));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /api/devices (add the 4 headers from: npm run dev:sign -- headers --method GET --path /api/devices --business <id>)",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/devices",
+            "header": [
+              {
+                "key": "X-Requested-With",
+                "value": "XMLHttpRequest"
+              },
+              {
+                "key": "X-Business",
+                "value": "{{businessId}}"
+              }
+            ]
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
                 ]
               }
             }

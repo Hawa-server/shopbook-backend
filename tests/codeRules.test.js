@@ -50,9 +50,10 @@ describe('deleting rows', () => {
     expect(offenders).toEqual([]);
   });
 
-  test('the housekeeping allow-list is exactly what the owner approved (empty until BE5)', () => {
+  test('the housekeeping allow-list is exactly what the owner approved', () => {
     // Changing this list needs the project owner's OK: update this test only then.
-    expect(HOUSEKEEPING_DELETES).toEqual([]);
+    // BE5: the expired-nonce clean-up (approved by the owner).
+    expect(HOUSEKEEPING_DELETES.map((entry) => entry.table)).toEqual(['DeviceRequestNonce']);
   });
 });
 
@@ -66,7 +67,22 @@ describe('the route registry', () => {
     const inRegistry = routes.map((r) => `${r.method} ${r.path}`).sort();
     expect(inExpress).toEqual(inRegistry);
 
-    const unmarked = routes.filter((r) => typeof r.business !== 'boolean').map((r) => `${r.method} ${r.path}`);
+    const unmarked = routes.filter((r) => typeof r.business !== 'boolean' || typeof r.signed !== 'boolean').map((r) => `${r.method} ${r.path}`);
     expect(unmarked).toEqual([]);
+  });
+
+  test('every business route is signed, except the two device-registration endpoints', () => {
+    const DEVICE_BOOTSTRAP = ['POST /api/devices/challenge', 'POST /api/devices'];
+    const unsigned = routes.filter((r) => r.business && !r.signed).map((r) => `${r.method} ${r.path}`).sort();
+    expect(unsigned).toEqual([...DEVICE_BOOTSTRAP].sort());
+  });
+
+  test("a route marked signed really checks the device signature (and one that isn't, doesn't)", () => {
+    const { app } = testApp();
+    const deps = app.locals.deps;
+    for (const route of routes) {
+      const names = route.build(deps).map((fn) => fn.name);
+      expect([`${route.method} ${route.path}`, names.includes('checkDevice')]).toEqual([`${route.method} ${route.path}`, route.signed]);
+    }
   });
 });

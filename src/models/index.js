@@ -119,19 +119,62 @@ function defineModels(sequelize) {
     conflict: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
   }, { freezeTableName: true, timestamps: false });
 
+  // A phone registered to one member in one business (BE5). The id comes
+  // from the phone; deviceCode is never reused; a revoked phone stays revoked.
+  const Device = sequelize.define('Device', {
+    id,
+    businessId: ref(),
+    userId: ref(),
+    deviceCode: { type: DataTypes.STRING(4), allowNull: false },
+    name: { type: DataTypes.STRING(60), allowNull: false },
+    publicKey: { type: DataTypes.JSON, allowNull: false }, // ECDSA P-256 public key (JWK)
+    keyAlgorithm: { type: DataTypes.STRING(16), allowNull: false, defaultValue: 'ECDSA-P256' },
+    isActive: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
+    lastSeenAt: time(),
+    lastSyncAt: time(),
+    signatureLockedUntil: time(), // set after too many failed signatures
+    revokedAt: time(),
+    revokedBy: ref(true),
+    createdAt: time(false),
+    updatedAt: time(false),
+  }, common);
+
+  // One-time numbers of signed requests (replay protection). No id column.
+  const DeviceRequestNonce = sequelize.define('DeviceRequestNonce', {
+    businessId: { type: DataTypes.CHAR(36), primaryKey: true },
+    deviceId: { type: DataTypes.CHAR(36), primaryKey: true },
+    nonce: { type: DataTypes.STRING(32), primaryKey: true },
+    expiresAt: time(false),
+  }, { freezeTableName: true, timestamps: false });
+
+  // One-time challenges signed by a phone to prove it holds its key.
+  const DeviceChallenge = sequelize.define('DeviceChallenge', {
+    id,
+    businessId: ref(),
+    userId: ref(),
+    challengeHash: { type: DataTypes.CHAR(64), allowNull: false },
+    expiresAt: time(false),
+    usedAt: time(),
+    createdAt: time(false),
+  }, { freezeTableName: true, timestamps: true, updatedAt: false });
+
   // Associations used to read a person's businesses with their names, and a
   // business's members with their accounts.
   Membership.belongsTo(Business, { foreignKey: 'businessId', as: 'business' });
   Business.hasOne(BusinessSettings, { foreignKey: 'businessId', as: 'settings' });
   Membership.belongsTo(User, { foreignKey: 'userId', as: 'user' });
+  Device.belongsTo(User, { foreignKey: 'userId', as: 'user' });
 
-  return { User, Business, BusinessSettings, Location, Membership, EmailToken, ChangeLog };
+  return {
+    User, Business, BusinessSettings, Location, Membership, EmailToken, ChangeLog,
+    Device, DeviceRequestNonce, DeviceChallenge,
+  };
 }
 
 // The models holding ONE business's data (they have a businessId column).
 // Route handlers reach them only through scoped() (src/services/scoped.js);
 // a test fails the build otherwise. Every later business table joins this list.
-const BUSINESS_MODELS = ['BusinessSettings', 'Location', 'Membership', 'ChangeLog'];
+const BUSINESS_MODELS = ['BusinessSettings', 'Location', 'Membership', 'ChangeLog', 'Device', 'DeviceRequestNonce', 'DeviceChallenge'];
 
 // Permanent records (sales, repayments, stock movements…): never updated or
 // deleted. Empty until BE7/BE8 add the first ones; scoped().update refuses

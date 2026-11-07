@@ -91,6 +91,7 @@ describe('PATCH /api/business/locale', () => {
     const added = await agent.post('/api/team').set(biz(businessId)).send({ name: 'Staff', phone: staffPhone, role: 'manager' });
     const { agent: staff } = await signInAgent(ctx.app, ctx.config, staffPhone, added.body.temporaryPassword);
     await staff.post('/api/auth/change-password').set(XHR).send({ currentPassword: added.body.temporaryPassword, newPassword: 'manager-pass-2026' });
+    staff.setPassword('manager-pass-2026');
     await staff.post('/api/auth/accept-terms').set(XHR).send({ version: '1' });
     expect((await staff.patch('/api/business/locale').set(biz(businessId)).send({ timezone: 'Africa/Accra' })).body.error.code).toBe('FORBIDDEN');
   });
