@@ -68,6 +68,7 @@ Node 26 (pinned in `package.json` `engines` and `.nvmrc`), Express 5, MySQL 8 wi
 - **Render free** (Root Directory: the project root, Start Command `npm start`, never `npm run dev`), **Aiven free** MySQL with SSL (the CA certificate stays outside the project and out of GitHub), **Brevo free** for email, **Sentry free** for errors. Details in the server plan's "Free-tier hosting".
 - Environment variables go in Render's dashboard, **never pasted from a local `.env`**; list each one by name in `.env.example`.
 - Production scripts (migrations, consistency checks, support scripts, backups) are run **by me** with a Git-ignored `.env.production`. You write them and test them against the development and test databases only.
+- **Migrations:** once a migration has run on production, never edit it; any change is a new migration. Before production, editing is allowed only after undoing it on every local database.
 - **Email** is only for accounts (confirm email, reset password, email changed, business closing), sent after the database change commits; in **tests** emails are kept in memory for the tests to read; in **development only** the whole email, link included, is printed in the terminal so I can click it; in **production** it goes to Brevo and only the template name and user ID are logged (never the address or a link). No SMS from the server.
 - **Support tools** are command-line scripts in `scripts/support/`, never routes; every change they make is logged in `SupportAction`.
 
@@ -111,7 +112,7 @@ Node 26 (pinned in `package.json` `engines` and `.nvmrc`), Express 5, MySQL 8 wi
 
 ## After each server task
 
-Update **`docs/api.md` for the frontend**, following the server plan's "The API contract for the frontend": the Changes list; conventions and headers (including the exact signed text); every error code with what the app should do; every endpoint (who, signed or not, request and response fields with examples, errors, rate limit, "Available since"); every sync operation's payload and results; every pull row type with what each role receives; and enums and flags with their wording. The app is built **only** from this file, so it must be complete on its own; `npm run check:api-docs` must pass. Then update `docs/guide.md` (plain-language explanation for studying), and the Postman collection. Tell me how to test in Postman and MySQL Workbench. Run the tests that apply (`npm test`, and `test:isolation`, `test:sync`, `test:concurrency`, `test:recovery` and `check:api-docs` once they exist) and report what passed and failed.
+Update **`docs/api.md` for the frontend**, following the server plan's "The API contract for the frontend": the Changes list; conventions and headers (including the exact signed text); every error code with what the app should do; every endpoint (who, signed or not, request and response fields with examples, errors, rate limit, "Available since"); every sync operation's payload and results; every pull row type with what each role receives; and enums and flags with their wording. The app is built **only** from this file, so it must be complete on its own; `npm run check:api-docs` must pass. Then update `docs/guide.md` (plain-language explanation for studying), and the Postman collection. Tell me how to test in Postman and MySQL Workbench. **`npm run test:all` must pass for a task's Done when**; use `npm test` while working. Also run `test:concurrency` and `test:recovery` once they exist. Report what passed and failed.
 
 ## How to work
 
@@ -126,6 +127,6 @@ Fill these in during BE1:
 
 - Node version: 26 (`nvm use` reads `.nvmrc`)
 - Start the server: `npm run dev` (local, reads `.env`, reloads on change); `npm start` on Render
-- Run the tests: `npm test` (runs `check:api-docs`, then Jest with `.env.test`)
+- Run the tests: `npm test` (everyday: `check:api-docs`, then the unit and API tests with `.env.test`, aiming for under 3 minutes); `npm run test:all` (everything, **required for every task's Done when**: `npm test`, then `test:isolation`, then `test:sync`; stops at the first failure); `npm run test:isolation`; `npm run test:sync` (sync torture test, three runs in a row)
 - Run migrations (local): `npm run db:migrate` (development, `.env`); `npm run db:migrate:test` (test, `.env.test`); `db:migrate:status`, `db:migrate:undo`
-- Run the consistency checks (local): not yet; added from BE5 (`check:sequences`, `check:operations`) and later tasks
+- Run the consistency checks (local): `npm run check:sequences`, `npm run check:operations`, `npm run check:stock` (read-only, development database `.env`); the others (`check:balances`, `check:receipts`) arrive with their tasks

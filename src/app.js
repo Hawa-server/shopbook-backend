@@ -40,6 +40,7 @@ function createApp({
   getModels = db.getModels,
   runTransaction = db.runTransaction,
   now = Date.now,
+  operations, // the sync operation registry; replaceable in tests (default: src/sync/operations)
 }) {
   const app = express();
 
@@ -68,7 +69,7 @@ function createApp({
   app.use(cookieParser()); // reads the session cookie (src/lib/session.js)
   app.use(csrfProtection(config));
 
-  const deps = { config, checkDatabase, logger, email, limiters, background, getModels, runTransaction, now };
+  const deps = { config, checkDatabase, logger, email, limiters, background, getModels, runTransaction, now, operations };
   for (const route of routes) {
     app[route.method.toLowerCase()](route.path, ...route.build(deps));
   }

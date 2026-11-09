@@ -103,10 +103,11 @@ function signup(deps) {
           id: randomUUID(), name: body.name, phone, email: body.email, passwordHash,
           language: body.language, termsVersion: TERMS_VERSION, termsAcceptedAt: now,
         }, { transaction });
+        const token = await accounts.issueEmailToken(models, transaction, { userId: user.id, purpose: 'confirm_email', email: body.email, now });
+        // Last: it ends by taking sync sequence numbers (always the last step).
         await accounts.createBusinessWithOwner(models, transaction, {
           owner: user, businessName: body.businessName, language: body.language, country: body.country,
         });
-        const token = await accounts.issueEmailToken(models, transaction, { userId: user.id, purpose: 'confirm_email', email: body.email, now });
         return { user, token };
       });
     } catch (err) {

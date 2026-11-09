@@ -10,6 +10,7 @@ const locale = require('../locale');
 const { createToken, hashToken, sameHash } = require('../lib/tokens');
 const { TERMS_VERSION } = require('../legal');
 const { recordChange } = require('./changeLog');
+const { startSequence, stampSequence } = require('../sync/runOperation');
 
 const HOUR_MS = 60 * 60 * 1000;
 const TOKEN_LIFETIME_MS = {
@@ -105,16 +106,25 @@ async function createBusinessWithOwner(models, transaction, { owner, businessNam
   const business = await models.Business.create({
     id: randomUUID(), country: rules.code, currency: rules.currency, timezone: rules.timezones[0],
   }, { transaction });
+  await startSequence(models, transaction, business.id);
+  const membershipId = randomUUID();
+  const locationId = randomUUID();
   // The membership first: the settings' composite key (businessId, updatedBy)
   // must point at an existing membership of this business.
   await models.Membership.create({
-    id: randomUUID(), businessId: business.id, userId: owner.id, role: 'owner', createdBy: owner.id,
+    id: membershipId, businessId: business.id, userId: owner.id, role: 'owner', createdBy: owner.id,
   }, { transaction });
   await models.BusinessSettings.create({
     businessId: business.id, businessName, defaultLanguage: language, updatedBy: owner.id,
     paymentMethods: [...rules.paymentMethods],
   }, { transaction });
-  await models.Location.create({ id: randomUUID(), businessId: business.id, name: businessName, type: 'shop' }, { transaction });
+  await models.Location.create({ id: locationId, businessId: business.id, name: businessName, type: 'shop' }, { transaction });
+  // Sequence numbers for the three synced rows, as the last step.
+  await stampSequence(models, transaction, business.id, [
+    { model: 'BusinessSettings', where: {} },
+    { model: 'Location', where: { id: locationId } },
+    { model: 'Membership', where: { id: membershipId } },
+  ]);
   return business;
 }
 
@@ -136,6 +146,7 @@ async function answerInvitation(models, transaction, { membershipId, userId, ans
     businessId: m.businessId, entity: 'membership', entityId: m.id, changedBy: userId, changedAt: now,
     before: { status: 'invited', role: m.role }, after: { status: answer === 'accept' ? 'active' : 'declined' },
   });
+  await stampSequence(models, transaction, m.businessId, [{ model: 'Membership', where: { id: m.id } }]);
   return true;
 }
 

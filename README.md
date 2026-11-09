@@ -20,14 +20,17 @@ The API for Shop Book, an offline-first bookkeeping app for market traders: Expr
 |---|---|
 | `npm run dev` | Starts the server with `.env`, restarting when a file changes |
 | `npm start` | Starts the server with the environment already set (Render) |
-| `npm test` | `check:api-docs`, then every Jest test, using `.env.test` |
+| `npm test` | Everyday tests: `check:api-docs`, then the unit and API tests, using `.env.test` (aim: under 3 minutes). Leaves out the isolation and torture suites |
+| `npm run test:all` | Everything: `npm test`, then `test:isolation`, then `test:sync`. **Must pass for every task's Done when.** Stops at the first failure |
 | `npm run check:api-docs` | Checks that `docs/api.md` lists exactly the server's routes |
 | `npm run db:migrate` / `db:migrate:status` / `db:migrate:undo` | Migrations on the development database (`.env`) |
 | `npm run db:migrate:test` | Migrations on the test database (`.env.test`) |
 | `npm run test:isolation` | The business isolation tests on their own |
+| `npm run test:sync` | The sync torture test (`tests/torture`), three runs in a row; stops at the first failing run |
+| `npm run check:sequences` / `check:operations` / `check:stock` | Read-only consistency checks of sync on the development database; print any problem (IDs only) and exit 1, change nothing |
 | `npm run dev:sign -- …` | Signs test requests with a throwaway test key (development only; see `docs/guide.md`) |
 
-Consistency checks (`check:balances`, `check:stock`, `check:receipts`, `check:sequences`, `check:operations`) arrive with the tasks that need them (BE5 onwards).
+`check:sequences` and `check:operations` exist since BE5, `check:stock` since BE7; `check:balances` and `check:receipts` arrive with their tasks. On production they're run only by the project owner: `node --env-file=.env.production scripts/check.js sequences` (read-only).
 
 ## Deployment
 

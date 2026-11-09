@@ -13,6 +13,7 @@ const { hashToken, sameHash } = require('../lib/tokens');
 const { sha256Hex, signingText, verifySignature } = require('../lib/deviceSigning');
 const { deleteExpiredNonces } = require('./housekeeping');
 const { recordChange } = require('./changeLog');
+const { stampSequence } = require('../sync/runOperation');
 
 const MINUTE = 60 * 1000;
 const CHALLENGE_LIFETIME_MS = 5 * MINUTE;
@@ -98,12 +99,15 @@ async function registerDevice(models, transaction, { businessId, userId, deviceI
   await recordChange(models, transaction, {
     businessId, entity: 'device', entityId: deviceId, changedBy: userId, changedAt: now, after: { status: 'active', deviceCode, name },
   });
+  await stampSequence(models, transaction, businessId, [{ model: 'Device', where: { id: deviceId } }]);
   return device;
 }
 
 // Revokes devices of this business matching `where` (one phone, or all of a
 // removed member's phones), inside `transaction`, and records each in the
 // ChangeLog. A revoked phone's next request gets 403 DEVICE_REVOKED.
+// Returns the revoked device IDs: the CALLER gives them new sequence numbers
+// at the end of its transaction (stampSequence must be the last step).
 async function revokeDevices(models, transaction, { businessId, where, revokedBy, now }) {
   const devices = await models.Device.findAll({ where: { ...where, businessId, isActive: true }, transaction });
   for (const device of devices) {
@@ -113,7 +117,7 @@ async function revokeDevices(models, transaction, { businessId, where, revokedBy
       before: { status: 'active' }, after: { status: 'revoked' },
     });
   }
-  return devices.length;
+  return devices.map((d) => d.id);
 }
 
 // ---- Every signed request ---------------------------------------------------
@@ -185,6 +189,14 @@ async function checkSignedRequest(deps, req) {
   return device;
 }
 
+// Records that this phone synced (push or pull), at most once every 5
+// minutes, so busy phones don't write to their device row on every request.
+async function touchLastSync(deps, device) {
+  const now = deps.now();
+  if (device.lastSyncAt && now - device.lastSyncAt.getTime() < LAST_SEEN_EVERY_MS) return;
+  await deps.getModels().Device.update({ lastSyncAt: new Date(now) }, { where: { id: device.id, businessId: device.businessId } });
+}
+
 // The answer while a phone is locked out after too many failed signatures.
 function lockedOut(retryAfterSeconds) {
   const err = new AppError(429, 'RATE_LIMITED', 'This phone is blocked for a few minutes after too many failed checks.');
@@ -206,5 +218,5 @@ async function countFailure(deps, models, device, now) {
 }
 
 module.exports = {
-  issueChallenge, registerDevice, revokeDevices, checkSignedRequest, CODE_ALPHABET, CHALLENGE_LIFETIME_MS,
+  issueChallenge, registerDevice, revokeDevices, checkSignedRequest, touchLastSync, CODE_ALPHABET, CHALLENGE_LIFETIME_MS,
 };

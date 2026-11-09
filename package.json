@@ -10,10 +10,15 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --env-file=.env --watch src/server.js",
-    "test": "npm run check:api-docs && node --env-file-if-exists=.env.test node_modules/jest/bin/jest.js --runInBand",
+    "test": "npm run check:api-docs && node --env-file-if-exists=.env.test node_modules/jest/bin/jest.js --runInBand --testPathIgnorePatterns=tests/torture --testPathIgnorePatterns=tests/isolation",
+    "test:all": "npm test && npm run test:isolation && npm run test:sync",
     "check:api-docs": "node scripts/check-api-docs.js",
+    "check:sequences": "node --env-file=.env scripts/check.js sequences",
+    "check:operations": "node --env-file=.env scripts/check.js operations",
+    "check:stock": "node --env-file=.env scripts/check.js stock",
     "dev:sign": "node scripts/dev-sign.js",
     "test:isolation": "node --env-file-if-exists=.env.test node_modules/jest/bin/jest.js --runInBand tests/isolation",
+    "test:sync": "node scripts/repeat-tests.js 3 tests/torture",
     "db:migrate": "node --env-file=.env node_modules/sequelize-cli/lib/sequelize db:migrate",
     "db:migrate:status": "node --env-file=.env node_modules/sequelize-cli/lib/sequelize db:migrate:status",
     "db:migrate:undo": "node --env-file=.env node_modules/sequelize-cli/lib/sequelize db:migrate:undo",
@@ -24,7 +29,7 @@
   "jest": {
     "testEnvironment": "node",
     "globalSetup": "<rootDir>/tests/setup/migrateTestDatabase.js",
-    "testTimeout": 30000,
+    "testTimeout": 90000,
     "testMatch": [
       "<rootDir>/tests/**/*.test.js"
     ]

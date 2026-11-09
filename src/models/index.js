@@ -61,6 +61,7 @@ function defineModels(sequelize) {
     returnPeriodDays: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 7 },
     defaultCreditLimitMinor: { type: DataTypes.BIGINT, allowNull: true }, // whole minor units of the business's currency
     version: { type: DataTypes.INTEGER.UNSIGNED, allowNull: false, defaultValue: 1 },
+    serverSeq: { type: DataTypes.BIGINT.UNSIGNED, allowNull: true }, // the business's sync sequence number (BE5)
     updatedBy: ref(true), // NULL = a system change (no person); otherwise a member of this business
     createdAt: time(false),
     updatedAt: time(false),
@@ -71,6 +72,7 @@ function defineModels(sequelize) {
     businessId: ref(),
     name: { type: DataTypes.STRING(60), allowNull: false },
     type: { type: DataTypes.ENUM('shop', 'warehouse'), allowNull: false, defaultValue: 'shop' },
+    serverSeq: { type: DataTypes.BIGINT.UNSIGNED, allowNull: true }, // the business's sync sequence number (BE5)
     createdAt: time(false),
     updatedAt: time(false),
   }, common);
@@ -88,6 +90,7 @@ function defineModels(sequelize) {
     createdBy: ref(),
     removedAt: time(),
     declinedAt: time(),
+    serverSeq: { type: DataTypes.BIGINT.UNSIGNED, allowNull: true }, // the business's sync sequence number (BE5)
     createdAt: time(false),
     updatedAt: time(false),
   }, common);
@@ -135,6 +138,7 @@ function defineModels(sequelize) {
     signatureLockedUntil: time(), // set after too many failed signatures
     revokedAt: time(),
     revokedBy: ref(true),
+    serverSeq: { type: DataTypes.BIGINT.UNSIGNED, allowNull: true }, // the business's sync sequence number (BE5)
     createdAt: time(false),
     updatedAt: time(false),
   }, common);
@@ -158,6 +162,141 @@ function defineModels(sequelize) {
     createdAt: time(false),
   }, { freezeTableName: true, timestamps: true, updatedAt: false });
 
+  // Sync bookkeeping (BE5 Part B). SyncSequence is touched ONLY by
+  // src/sync/runOperation.js (a test checks it).
+  const SyncSequence = sequelize.define('SyncSequence', {
+    businessId: { type: DataTypes.CHAR(36), primaryKey: true },
+    lastSeq: { type: DataTypes.BIGINT.UNSIGNED, allowNull: false, defaultValue: 0 },
+  }, { freezeTableName: true, timestamps: false });
+
+  // The outcome of every pushed operation, stored with its effect.
+  const ProcessedOperation = sequelize.define('ProcessedOperation', {
+    businessId: { type: DataTypes.CHAR(36), primaryKey: true },
+    opId: { type: DataTypes.CHAR(36), primaryKey: true },
+    deviceId: ref(),
+    userId: ref(),
+    type: { type: DataTypes.STRING(40), allowNull: false },
+    payloadHash: { type: DataTypes.CHAR(64), allowNull: false },
+    status: { type: DataTypes.ENUM('pending', 'saved', 'rejected'), allowNull: false },
+    errorCode: { type: DataTypes.STRING(40), allowNull: true },
+    resultJson: { type: DataTypes.JSON, allowNull: true },
+    processedAt: time(false),
+  }, { freezeTableName: true, timestamps: false });
+
+  // The receipt registry (used from BE8).
+  const ReceiptNumber = sequelize.define('ReceiptNumber', {
+    businessId: { type: DataTypes.CHAR(36), primaryKey: true },
+    receiptNumber: { type: DataTypes.STRING(20), primaryKey: true },
+    recordType: { type: DataTypes.ENUM('sale', 'correction', 'repayment'), allowNull: false },
+    recordId: ref(),
+    deviceId: ref(),
+    createdAt: time(false),
+  }, { freezeTableName: true, timestamps: true, updatedAt: false });
+
+  // Products and sizes (BE6). Editable records: version, updatedBy and
+  // updatedAt, "last change received wins, with history" (ChangeLog).
+  // nameNormalized is indexed but NOT unique (same-name products are kept and
+  // warned about). costMinor is the owner's only: the pull leaves it out for
+  // everyone else.
+  const money = (allowNull = true) => ({ type: DataTypes.BIGINT, allowNull }); // whole minor units
+  const Product = sequelize.define('Product', {
+    id,
+    businessId: ref(),
+    name: { type: DataTypes.STRING(80), allowNull: false },
+    nameNormalized: { type: DataTypes.STRING(80), allowNull: false },
+    type: { type: DataTypes.ENUM('clothing', 'shoes', 'fabric', 'other'), allowNull: false },
+    unit: { type: DataTypes.ENUM('piece', 'pair', 'set', 'dozen', 'yard', 'custom'), allowNull: false },
+    unitLabel: { type: DataTypes.STRING(20), allowNull: true }, // the shop's own word, for unit 'custom'
+    unitScale: { type: DataTypes.TINYINT.UNSIGNED, allowNull: false }, // 2 for yards (half yards), else 1; set by the server
+    retailMinor: money(false),
+    wholesaleMinor: money(),
+    costMinor: money(),
+    lowStockLevelUnits: { type: DataTypes.INTEGER, allowNull: true }, // BE7: this product's own low-stock level (null = the business's)
+    lowStockWarnings: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true }, // BE7: false = no low-stock warnings for it
+    isHidden: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+    version: { type: DataTypes.INTEGER.UNSIGNED, allowNull: false, defaultValue: 1 },
+    createdBy: ref(),
+    updatedBy: ref(true),
+    serverSeq: { type: DataTypes.BIGINT.UNSIGNED, allowNull: true },
+    createdAt: time(false),
+    updatedAt: time(false),
+  }, common);
+
+  // A product's size. NULL prices mean "use the product's".
+  const ProductSize = sequelize.define('ProductSize', {
+    id,
+    businessId: ref(),
+    productId: ref(),
+    label: { type: DataTypes.STRING(20), allowNull: false },
+    labelNormalized: { type: DataTypes.STRING(20), allowNull: false },
+    sortOrder: { type: DataTypes.INTEGER, allowNull: false },
+    retailMinor: money(),
+    wholesaleMinor: money(),
+    costMinor: money(),
+    isActive: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
+    version: { type: DataTypes.INTEGER.UNSIGNED, allowNull: false, defaultValue: 1 },
+    createdBy: ref(),
+    updatedBy: ref(true),
+    serverSeq: { type: DataTypes.BIGINT.UNSIGNED, allowNull: true },
+    createdAt: time(false),
+    updatedAt: time(false),
+  }, common);
+
+  // Server-only price history (insert only, never pulled): the prices and
+  // cost of a product (sizeId NULL) or size at each version. sizeKey is a
+  // generated column (MySQL works it out) and is left out here.
+  const PriceVersion = sequelize.define('PriceVersion', {
+    id,
+    businessId: ref(),
+    productId: ref(),
+    sizeId: ref(true),
+    version: { type: DataTypes.INTEGER.UNSIGNED, allowNull: false },
+    retailMinor: money(),
+    wholesaleMinor: money(),
+    costMinor: money(),
+    createdByOpId: ref(),
+    createdAt: time(false),
+  }, { freezeTableName: true, timestamps: true, updatedAt: false });
+
+  // Stock (BE7). Both are PERMANENT records: inserted, never changed. Stock
+  // on hand is never stored: see src/services/stockRule.js.
+  const StockMovement = sequelize.define('StockMovement', {
+    id,
+    businessId: ref(),
+    locationId: ref(),
+    productId: ref(),
+    sizeId: ref(true),
+    quantityUnits: { type: DataTypes.INTEGER, allowNull: false }, // signed: + in, − out (half yards for yard products)
+    type: { type: DataTypes.ENUM('opening', 'restock', 'sale', 'return_in', 'exchange_in', 'exchange_out', 'removal'), allowNull: false },
+    reason: { type: DataTypes.ENUM('damaged', 'lost', 'supplier_return', 'used', 'other'), allowNull: true },
+    note: { type: DataTypes.STRING(200), allowNull: true },
+    saleId: ref(true),
+    correctionId: ref(true),
+    flags: { type: DataTypes.JSON, allowNull: false }, // set once on save: { belowZeroOnArrival?, clockSkew? }
+    recordedBy: ref(),
+    recordedAt: time(false), // the phone's time
+    receivedAt: time(false), // the server's time
+    serverSeq: { type: DataTypes.BIGINT.UNSIGNED, allowNull: true },
+  }, { freezeTableName: true, timestamps: false });
+
+  // What was on the shelf when someone counted (never a difference).
+  const StockCount = sequelize.define('StockCount', {
+    id,
+    businessId: ref(),
+    locationId: ref(),
+    productId: ref(),
+    sizeId: ref(true),
+    countedUnits: { type: DataTypes.INTEGER, allowNull: false },
+    baselineUnits: { type: DataTypes.INTEGER, allowNull: false }, // what the phone showed
+    baselineCursor: { type: DataTypes.BIGINT.UNSIGNED, allowNull: false }, // the phone's sync cursor then
+    reason: { type: DataTypes.ENUM('damaged', 'lost_or_stolen', 'miscounted_before', 'other'), allowNull: true },
+    note: { type: DataTypes.STRING(200), allowNull: true },
+    recordedBy: ref(),
+    recordedAt: time(false),
+    receivedAt: time(false),
+    serverSeq: { type: DataTypes.BIGINT.UNSIGNED, allowNull: true },
+  }, { freezeTableName: true, timestamps: false });
+
   // Associations used to read a person's businesses with their names, and a
   // business's members with their accounts.
   Membership.belongsTo(Business, { foreignKey: 'businessId', as: 'business' });
@@ -167,18 +306,25 @@ function defineModels(sequelize) {
 
   return {
     User, Business, BusinessSettings, Location, Membership, EmailToken, ChangeLog,
-    Device, DeviceRequestNonce, DeviceChallenge,
+    Device, DeviceRequestNonce, DeviceChallenge, SyncSequence, ProcessedOperation, ReceiptNumber,
+    Product, ProductSize, PriceVersion, StockMovement, StockCount,
   };
 }
 
 // The models holding ONE business's data (they have a businessId column).
 // Route handlers reach them only through scoped() (src/services/scoped.js);
 // a test fails the build otherwise. Every later business table joins this list.
-const BUSINESS_MODELS = ['BusinessSettings', 'Location', 'Membership', 'ChangeLog', 'Device', 'DeviceRequestNonce', 'DeviceChallenge'];
+const BUSINESS_MODELS = ['BusinessSettings', 'Location', 'Membership', 'ChangeLog', 'Device', 'DeviceRequestNonce', 'DeviceChallenge', 'ProcessedOperation', 'ReceiptNumber', 'Product', 'ProductSize', 'PriceVersion', 'StockMovement', 'StockCount'];
+
+// The tables phones pull (each row has a serverSeq), and the pull row type of each.
+const SYNCED_MODELS = {
+  BusinessSettings: 'settings', Location: 'location', Membership: 'membership', Device: 'device', Product: 'product', ProductSize: 'size',
+  StockMovement: 'stockMovement', StockCount: 'stockCount',
+};
 
 // Permanent records (sales, repayments, stock movements…): never updated or
-// deleted. Empty until BE7/BE8 add the first ones; scoped().update refuses
-// every model listed here.
-const PERMANENT_MODELS = [];
+// deleted; scoped().update refuses every model listed here. PriceVersion
+// (BE6), stock movements and counts (BE7); BE8 adds sales.
+const PERMANENT_MODELS = ['PriceVersion', 'StockMovement', 'StockCount'];
 
-module.exports = { defineModels, BUSINESS_MODELS, PERMANENT_MODELS };
+module.exports = { defineModels, BUSINESS_MODELS, PERMANENT_MODELS, SYNCED_MODELS };

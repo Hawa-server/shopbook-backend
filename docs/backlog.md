@@ -118,6 +118,7 @@ Each story below will go through the four planning steps (acceptance criteria, s
 ### Epic 9: Language
 
 52. **English or Twi.** As anyone in the shop, I want to use the app in a supported language, so that everyone on the team understands it.
+60. **Spoken help.** As someone in the shop who finds reading hard, I want to tap a speaker and hear what to do on a screen, in my language, so that I can use the app without reading every word.
 
 ### Epic 10: Accounts, privacy and support (added 1 Nov 2026)
 
@@ -190,6 +191,7 @@ Each story below will go through the four planning steps (acceptance criteria, s
 - **Stage 2:** manager approval for corrections recorded by sales associates; more locations (a second shop, a warehouse), each with its own stock and staff; **moving stock between locations**; the owner viewing all locations or one at a time; a private, always-up-to-date link for each customer's statement; weekly and monthly reports; automatic SMS reminders.
 - **Business side (alongside the stages):** how shops find and sign up for the app, whether it's free or paid (for example, free with a paid plan for more staff or locations), and support for shops that get stuck.
 - **Stage 3:** records to show a lender (PDF export), matching mobile money payments, voice input, supplier credit (goods the business takes on credit).
+- **Later (noted 7 Nov 2026), not in this version:** voice notes on customers and debts, and product photos. Both need file storage (somewhere safe to keep recordings and pictures, and to sync them between phones) that the app doesn't have yet.
 - **Later (noted 1 Nov 2026):** handing a business to a new owner (for example, when the owner sells the shop or can't continue). Today a business has exactly one owner who can't be removed (Epic 0, AC11).
 
 ---
@@ -273,6 +275,7 @@ No codebase exists yet, so this epic sets up everything the user-facing epics de
 - **AC43: Support tools.** Given the developer needs to help a shop, then support tools, run from the developer's laptop and never from the app, can find a business by phone number or email, reset an owner's password (AC35), and count businesses and phones.
 - **AC44: Support is recorded.** Given the developer uses a support tool that changes something, then the action, the reason, who did it and when are recorded.
 - **AC45: Business details set once.** (Added 3 Nov 2026.) Given I'm the owner, when I open **More → Business settings**, then I can change the business name, the shop phone number and a short receipt note; every phone shows the new name after its next sync, and receipts, reminders and statements fill them in automatically. Staff can see the name but not change it.
+- **AC46: Spoken help.** (Added 7 Nov 2026.) Given I'm on a main screen or a confirmation, when I tap the speaker button (with the label "Listen"), then a short clip **recorded by a person** (not computer speech) plays in my language, English or Twi, saying what the screen is for and what to do next. It plays without internet, and tapping again stops it. It never plays by itself. If a screen has no clip in my language yet, the button isn't shown. All the clips together are under 1 MB.
 
 ## Step 2: Stories and points
 
@@ -296,8 +299,9 @@ No codebase exists yet, so this epic sets up everything the user-facing epics de
 | F15 | Help: report a problem on WhatsApp | 2 | Should have | AC41 |
 | F16 | Device signing keys: enrol with password and proof of key, sign every business request (gap story) | 5 | Must have | F-26 |
 | F17 | Concurrency safety: one lock order, deadlock retries, database constraints, consistency checks, concurrency and recovery tests (gap story) | 5 | Must have | AC17, AC18 (under real simultaneous use) |
+| F18 | Spoken help: recorded clips on main screens and confirmations | 3 | Should have | AC46 |
 
-**Epic 0 total:** 18 stories, **85 points** (Must have: 75; Should have: 10). (The sync engine, first estimated at 13, was split into F5a and F5b; see Step 4. F10–F15 added on 1 Nov 2026; F16–F17 added after the engineering reviews the same day.)
+**Epic 0 total:** 19 stories, **88 points** (Must have: 75; Should have: 13). (The sync engine, first estimated at 13, was split into F5a and F5b; see Step 4. F10–F15 added on 1 Nov 2026; F16–F17 added after the engineering reviews the same day; F18 added on 7 Nov 2026.)
 
 ## Step 3: Product owner decisions
 
@@ -386,7 +390,7 @@ From Part 1, Epic 1.
 - **AC1: Add a product.** Given I'm the owner, when I enter a name, choose a type (clothing, shoes, fabric, or other), a unit, and its prices, and save, then the product appears in my product list straight away, even with no internet.
 - **AC2: Name required.** Given I'm adding a product, when the name is empty or only spaces, then it isn't saved and I see "Enter a product name."
 - **AC3: Name length.** Given I'm adding a product, when the name is longer than 80 characters, then it isn't saved and I see "Use a shorter name (up to 80 characters)."
-- **AC4: Duplicate name.** Given my business already has a product called "Black sandal", when I add another "black sandal" (any capitals or extra spaces), then I'm warned "You already have a product with this name" and can change it or open the existing one.
+- **AC4: Duplicate name.** Given my business already has a product called "Black sandal", when I add another "black sandal" (any capitals or extra spaces), then I'm warned "You already have a product with this name" and can change it or open the existing one. If I save it anyway, or two phones added the same name offline, both products are kept, so no sale of either is lost, and the one the server receives second is warned. The same applies to two sizes of one product with the same label.
 - **AC5: Starting stock.** Given I'm adding a product, when I enter a starting quantity (for each size, if it has sizes), then that stock is recorded as the product's first stock entry, with my name and the date.
 - **AC6: Business only.** Given I add a product, then it belongs only to my business, and no other business can ever see it.
 
@@ -423,9 +427,9 @@ From Part 1, Epic 1.
 
 ### Editing and hiding
 
-- **AC26: Edit.** Given I'm the owner, when I change a product's name, type details, unit, or prices and save, then the changes appear on every team member's phone after they sync.
-- **AC27: Hide.** Given I'm the owner, when I hide a product, then it no longer appears in the list for selling, but past sales, debts, and reports still show it by name.
-- **AC28: Show hidden.** Given I'm the owner, when I choose "Show hidden products", then I can see and un-hide them.
+- **AC26: Edit.** Given I'm the owner or a manager, when I change a product's name, type details, unit, or selling prices (only the owner sees or changes cost prices) and save, then the changes appear on every team member's phone after they sync.
+- **AC27: Hide.** Given I'm the owner or a manager, when I hide a product, then it no longer appears in the list for selling, but past sales, debts, and reports still show it by name.
+- **AC28: Show hidden.** Given I'm the owner or a manager, when I choose "Show hidden products", then I can see and un-hide them.
 - **AC29: Never deleted.** Given a product has ever been sold or stocked, then it can't be deleted, only hidden.
 - **AC30: Who changed it.** Given a product's prices or name are changed, then the change is recorded with who made it and when, and the owner can see the history.
 
@@ -587,8 +591,8 @@ From Part 1, Epic 2. ## Step 1: Acceptance criteria
 
 ### Counting stock
 
-- **AC10: Record a count.** Given I'm the owner or manager, when I count a size and enter the number on the shelf, then the app records the difference as an adjustment (for example, "Counted 4, expected 6: −2") with my name.
-- **AC11: Reason for a difference.** Given a count differs from the expected stock, then a reason is required before saving; given it matches, the count is saved as "Checked, correct" with no reason.
+- **AC10: Record a count.** Given I'm the owner or manager, when I count a size and enter the number on the shelf, then the count is saved with my name and I see the difference from what was expected (for example, "Counted 4, expected 6: −2"). The count records what was on the shelf; the difference is worked out, so if another phone's sale from before the count arrives later, the difference corrects itself.
+- **AC11: Reason for a difference.** Given a count differs from what my phone showed, then I must choose a reason (**Damaged**, **Lost or stolen**, **Miscounted before**, or **Other**, which needs a written note) before saving; given it matches, the count is saved as "Checked, correct" with no reason.
 - **AC12: Counting during the day close.** Given the manager is closing the day, then the spot-check of shelves uses this same count screen.
 
 ### Seeing stock
@@ -640,7 +644,7 @@ As a shop owner or manager, I want to remove damaged, lost, or returned items wi
 
 As a manager, I want to type what I counted and let the app work out the difference, so that I don't do sums at closing time.
 
-**Technical notes:** the phone sends the **difference** it calculated and the counted number. If other phones' sales arrive later, the server keeps the difference as sent and recalculates stock from all movements; a count is a snapshot, not an overwrite (F-7).
+**Technical notes:** the phone sends the **counted number** and what it showed (the baseline), never a difference. Stock afterwards is the count plus the movements recorded after it, and the difference is worked out from the records, so it corrects itself when other phones' sales arrive late (Story 2.9, ADR-24).
 
 ### Story 2.4: Stock list by product and size
 

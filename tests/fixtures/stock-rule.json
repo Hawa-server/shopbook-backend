@@ -1,0 +1,95 @@
+{
+  "about": "Shared fixtures for the stock rule (server src/services/stockRule.js and the phone app). docs/api.md shows this exact JSON; a test keeps them identical.",
+  "cases": [
+    {
+      "name": "no count: stock is the sum of the movements",
+      "movements": [
+        { "id": "a0000000-0000-4000-8000-000000000001", "quantityUnits": 10, "recordedAt": "2026-11-10T08:00:00.000Z", "receivedAt": "2026-11-10T08:00:05.000Z" },
+        { "id": "a0000000-0000-4000-8000-000000000002", "quantityUnits": -3, "recordedAt": "2026-11-10T09:00:00.000Z", "receivedAt": "2026-11-10T09:00:05.000Z" }
+      ],
+      "counts": [],
+      "expect": { "stockOnHand": 7, "counts": [] }
+    },
+    {
+      "name": "the worked example: A shows 10, B sells 3 at 09:58 offline, A counts 8 at 10:00, B's sale arrives later",
+      "movements": [
+        { "id": "b0000000-0000-4000-8000-000000000001", "quantityUnits": 10, "recordedAt": "2026-11-10T08:00:00.000Z", "receivedAt": "2026-11-10T08:00:05.000Z" },
+        { "id": "b0000000-0000-4000-8000-000000000002", "quantityUnits": -3, "recordedAt": "2026-11-10T09:58:00.000Z", "receivedAt": "2026-11-10T11:30:00.000Z" }
+      ],
+      "counts": [
+        { "id": "b0000000-0000-4000-8000-0000000000c1", "countedUnits": 8, "recordedAt": "2026-11-10T10:00:00.000Z", "receivedAt": "2026-11-10T10:00:10.000Z" }
+      ],
+      "expect": {
+        "stockOnHand": 8,
+        "counts": [{ "id": "b0000000-0000-4000-8000-0000000000c1", "expectedUnits": 7, "differenceUnits": 1, "needsCheck": true }]
+      }
+    },
+    {
+      "name": "a movement recorded after the count is added to it; one long before it is absorbed and doesn't trigger a check",
+      "movements": [
+        { "id": "c0000000-0000-4000-8000-000000000001", "quantityUnits": 20, "recordedAt": "2026-11-10T07:00:00.000Z", "receivedAt": "2026-11-10T12:00:00.000Z" },
+        { "id": "c0000000-0000-4000-8000-000000000002", "quantityUnits": -2, "recordedAt": "2026-11-10T10:30:00.000Z", "receivedAt": "2026-11-10T10:30:05.000Z" }
+      ],
+      "counts": [
+        { "id": "c0000000-0000-4000-8000-0000000000c1", "countedUnits": 15, "recordedAt": "2026-11-10T10:00:00.000Z", "receivedAt": "2026-11-10T10:00:10.000Z" }
+      ],
+      "expect": {
+        "stockOnHand": 13,
+        "counts": [{ "id": "c0000000-0000-4000-8000-0000000000c1", "expectedUnits": 20, "differenceUnits": -5, "needsCheck": false }]
+      }
+    },
+    {
+      "name": "two counts: only the latest is the starting point; each difference uses only the rows before it",
+      "movements": [
+        { "id": "d0000000-0000-4000-8000-000000000001", "quantityUnits": 10, "recordedAt": "2026-11-10T08:00:00.000Z", "receivedAt": "2026-11-10T08:00:05.000Z" },
+        { "id": "d0000000-0000-4000-8000-000000000002", "quantityUnits": -1, "recordedAt": "2026-11-10T12:00:00.000Z", "receivedAt": "2026-11-10T12:00:05.000Z" },
+        { "id": "d0000000-0000-4000-8000-000000000003", "quantityUnits": 4, "recordedAt": "2026-11-10T16:00:00.000Z", "receivedAt": "2026-11-10T16:00:05.000Z" }
+      ],
+      "counts": [
+        { "id": "d0000000-0000-4000-8000-0000000000c1", "countedUnits": 9, "recordedAt": "2026-11-10T09:00:00.000Z", "receivedAt": "2026-11-10T09:00:10.000Z" },
+        { "id": "d0000000-0000-4000-8000-0000000000c2", "countedUnits": 6, "recordedAt": "2026-11-10T14:00:00.000Z", "receivedAt": "2026-11-10T14:00:10.000Z" }
+      ],
+      "expect": {
+        "stockOnHand": 10,
+        "counts": [
+          { "id": "d0000000-0000-4000-8000-0000000000c1", "expectedUnits": 10, "differenceUnits": -1, "needsCheck": false },
+          { "id": "d0000000-0000-4000-8000-0000000000c2", "expectedUnits": 8, "differenceUnits": -2, "needsCheck": false }
+        ]
+      }
+    },
+    {
+      "name": "same instant: the smaller id comes first (a movement with a larger id than the count counts after it)",
+      "movements": [
+        { "id": "e0000000-0000-4000-8000-000000000001", "quantityUnits": 5, "recordedAt": "2026-11-10T08:00:00.000Z", "receivedAt": "2026-11-10T08:00:05.000Z" },
+        { "id": "e0000000-0000-4000-8000-0000000000f0", "quantityUnits": -1, "recordedAt": "2026-11-10T10:00:00.000Z", "receivedAt": "2026-11-10T10:00:01.000Z" },
+        { "id": "e0000000-0000-4000-8000-000000000002", "quantityUnits": -2, "recordedAt": "2026-11-10T10:00:00.000Z", "receivedAt": "2026-11-10T10:00:01.000Z" }
+      ],
+      "counts": [
+        { "id": "e0000000-0000-4000-8000-0000000000c1", "countedUnits": 3, "recordedAt": "2026-11-10T10:00:00.000Z", "receivedAt": "2026-11-10T10:00:01.000Z" }
+      ],
+      "expect": {
+        "stockOnHand": 2,
+        "counts": [{ "id": "e0000000-0000-4000-8000-0000000000c1", "expectedUnits": 3, "differenceUnits": 0, "needsCheck": false }]
+      }
+    },
+    {
+      "name": "half yards: 2.5 yards is 5 units; selling 1.5 yards is -3",
+      "movements": [
+        { "id": "f0000000-0000-4000-8000-000000000001", "quantityUnits": 5, "recordedAt": "2026-11-10T08:00:00.000Z", "receivedAt": "2026-11-10T08:00:05.000Z" },
+        { "id": "f0000000-0000-4000-8000-000000000002", "quantityUnits": -3, "recordedAt": "2026-11-10T09:00:00.000Z", "receivedAt": "2026-11-10T09:00:05.000Z" }
+      ],
+      "counts": [],
+      "expect": { "stockOnHand": 2, "counts": [] }
+    },
+    {
+      "name": "below zero is allowed (two phones sold the last item)",
+      "movements": [
+        { "id": "a1000000-0000-4000-8000-000000000001", "quantityUnits": 1, "recordedAt": "2026-11-10T08:00:00.000Z", "receivedAt": "2026-11-10T08:00:05.000Z" },
+        { "id": "a1000000-0000-4000-8000-000000000002", "quantityUnits": -1, "recordedAt": "2026-11-10T09:00:00.000Z", "receivedAt": "2026-11-10T09:30:00.000Z" },
+        { "id": "a1000000-0000-4000-8000-000000000003", "quantityUnits": -1, "recordedAt": "2026-11-10T09:05:00.000Z", "receivedAt": "2026-11-10T09:31:00.000Z" }
+      ],
+      "counts": [],
+      "expect": { "stockOnHand": -1, "counts": [] }
+    }
+  ]
+}

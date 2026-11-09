@@ -22,6 +22,7 @@ const { requireSession } = require('../lib/session');
 const { requireAuth, requireRole } = require('../middleware/requireAuth');
 const { requireDevice } = require('../middleware/requireDevice');
 const devices = require('../services/devices');
+const { stampSequence } = require('../sync/runOperation');
 const { scoped } = require('../services/scoped');
 const { updateUser } = require('../services/users');
 const accounts = require('../services/accounts');
@@ -78,6 +79,12 @@ function logChange(s, transaction, { membershipId, changedBy, changedAt, before 
   return s.ChangeLog.create({
     id: randomUUID(), entity: 'membership', entityId: membershipId, changedBy, changedAt, before, after,
   }, { transaction });
+}
+
+// Gives changed synced rows of this business new sync sequence numbers
+// (phones pull them again). ALWAYS the last step of the transaction.
+function stampLast(models, transaction, req, rows) {
+  return stampSequence(models, transaction, req.business.id, rows);
 }
 
 // Applies `changes` to one membership of this business through scoped().
@@ -175,7 +182,9 @@ function addMember(deps) {
             }, { transaction });
             await log(membershipId, { status: 'invited', role: body.role, name: body.name });
           }
-          return { membership: await findMemberOrNotFound(s, models, membershipId, transaction), invited: true };
+          const invitedRow = await findMemberOrNotFound(s, models, membershipId, transaction);
+          await stampLast(models, transaction, req, [{ model: 'Membership', where: { id: membershipId } }]);
+          return { membership: invitedRow, invited: true };
         }
 
         const user = await models.User.create({
@@ -189,6 +198,7 @@ function addMember(deps) {
         const token = body.email
           ? await accounts.issueEmailToken(models, transaction, { userId: user.id, purpose: 'confirm_email', email: body.email, now })
           : null;
+        await stampLast(models, transaction, req, [{ model: 'Membership', where: { id: membershipId } }]);
         return { membership, invited: false, token };
       });
     } catch (err) {
@@ -225,7 +235,9 @@ function changeRole(deps) {
       if (m.role === body.role) return m;
       await updateMember(s, transaction, m.id, { role: body.role });
       await logChange(s, transaction, { membershipId: m.id, changedBy: req.user.id, changedAt: now, before: { role: m.role }, after: { role: body.role } });
-      return findMemberOrNotFound(s, models, m.id, transaction);
+      const changed = await findMemberOrNotFound(s, models, m.id, transaction);
+      await stampLast(models, transaction, req, [{ model: 'Membership', where: { id: m.id } }]);
+      return changed;
     });
     res.json({ member: memberView(member) });
   };
@@ -266,7 +278,7 @@ function resetPassword(deps) {
 // DELETE /api/team/:membershipId: removes someone from THIS business (or
 // cancels a pending invitation). Their next request here gets 403
 // ACCESS_REMOVED; their sign-in and other businesses are untouched (ADR-19).
-// From BE5 this also revokes their phones for this business.
+// It also revokes their phones for this business, in the same transaction.
 function removeMember(deps) {
   return async function handleRemove(req, res) {
     const models = deps.getModels();
@@ -281,10 +293,15 @@ function removeMember(deps) {
         membershipId: m.id, changedBy: req.user.id, changedAt: now, before: { status: statusOf(m), role: m.role }, after: { status: 'removed' },
       });
       // Their phones for THIS business are revoked in the same transaction.
-      await devices.revokeDevices(models, transaction, {
+      const revoked = await devices.revokeDevices(models, transaction, {
         businessId: req.business.id, where: { userId: m.userId }, revokedBy: req.user.id, now,
       });
-      return findMemberOrNotFound(s, models, m.id, transaction);
+      const removed = await findMemberOrNotFound(s, models, m.id, transaction);
+      await stampLast(models, transaction, req, [
+        { model: 'Membership', where: { id: m.id } },
+        ...revoked.map((id) => ({ model: 'Device', where: { id } })),
+      ]);
+      return removed;
     });
     res.json({ member: memberView(member) });
   };

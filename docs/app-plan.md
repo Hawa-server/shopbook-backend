@@ -268,7 +268,7 @@ Requests go to `/api` on the app's own address. Locally the Vite proxy forwards 
 - **The API helper signs every business request:** it builds the text (method, path with query, SHA-256 of the exact body string it sends, device ID, business ID, timestamp, nonce, one per line), signs it with `crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, …)`, and adds `X-Device-Id`, `X-Signed-At`, `X-Nonce` (16 random bytes, `crypto.getRandomValues`) and `X-Signature`. The body is turned into a string **once**, and that same string is both hashed and sent.
 - **Clock:** every response's `X-Server-Time` updates a stored offset (server time − phone time); `X-Signed-At` uses phone time + offset. On `401 CLOCK_OUT_OF_RANGE`, update the offset from the answer and retry once.
 - **Key missing** (storage cleared, or `DEVICE_SIGNATURE_INVALID` after a reinstall): ask the person to sign in again, register as a new device, and tell the owner's phone list shows the old one to revoke.
-- **Content-Security-Policy** (in `vercel.json` headers): `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'`. No inline scripts, no `dangerouslySetInnerHTML`, no scripts from other sites. This is what protects the signing key from injected code.
+- **Content-Security-Policy** (in `vercel.json` headers): `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'`. No inline scripts, no `dangerouslySetInnerHTML`, no scripts from other sites. This is what protects the signing key from injected code.
 
 ---
 
@@ -487,6 +487,14 @@ Owner and manager also see **Refunds to check** and **Counts to check** with wha
 
 Every screen at 360px and 390px, in English and Twi (a Twi speaker reviews the wording), offline, and on a low-cost Android phone; larger text setting; data use for a day's sync under 1 MB; README.
 
-**Done when:** the test shop uses the app for a full day without the notebook.
+- **Spoken help (F18, AC46):**
+  - a `SpeakButton` component: a 48px button with a speaker icon and the label "Listen", placed in the Header
+  - it plays `public/audio/<lang>/<clip>.<ext>` for the person's language, and tapping again stops it; it never plays by itself, only when tapped
+  - it is hidden when that language has no clip for the screen, **and when the phone can't play the clip's format** (checked with `canPlayType`; some older iPhones can't play Opus)
+  - clips are recorded by a person and listed in `design.md` §12
+  - the service worker caches them so they play offline, under 1 MB in total
+  - the CSP gains `media-src 'self'`
+
+**Done when:** the test shop uses the app for a full day without the notebook; every clip listed in `design.md` §12 plays in airplane mode in both languages, all the clips together are under 1 MB, and a test shows the button hidden when the phone can't play the format.
 
 **If time runs short:** FE1–FE8, FE11 and FE13's download and Help make a usable first version; FE9, FE10, closing a business and FE14 (practice shop) can follow.

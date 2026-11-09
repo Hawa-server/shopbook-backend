@@ -70,7 +70,7 @@
           ]
         },
         {
-          "name": "Unknown route \u2192 404 NOT_FOUND",
+          "name": "Unknown route → 404 NOT_FOUND",
           "request": {
             "method": "GET",
             "url": "{{baseUrl}}/api/does-not-exist"
@@ -87,7 +87,7 @@
           ]
         },
         {
-          "name": "POST without X-Requested-With \u2192 403 CSRF_HEADER_MISSING",
+          "name": "POST without X-Requested-With → 403 CSRF_HEADER_MISSING",
           "request": {
             "method": "POST",
             "url": "{{baseUrl}}/api/does-not-exist"
@@ -104,7 +104,7 @@
           ]
         },
         {
-          "name": "POST from a foreign Origin \u2192 403 ORIGIN_NOT_ALLOWED",
+          "name": "POST from a foreign Origin → 403 ORIGIN_NOT_ALLOWED",
           "request": {
             "method": "POST",
             "url": "{{baseUrl}}/api/does-not-exist",
@@ -131,7 +131,7 @@
           ]
         },
         {
-          "name": "POST with header and the app's Origin \u2192 passes the check (404 here)",
+          "name": "POST with header and the app's Origin → passes the check (404 here)",
           "request": {
             "method": "POST",
             "url": "{{baseUrl}}/api/does-not-exist",
@@ -158,7 +158,7 @@
           ]
         },
         {
-          "name": "Invalid JSON \u2192 400 INVALID_JSON",
+          "name": "Invalid JSON → 400 INVALID_JSON",
           "request": {
             "method": "POST",
             "url": "{{baseUrl}}/api/does-not-exist",
@@ -251,7 +251,7 @@
           ]
         },
         {
-          "name": "POST /api/auth/signup (same phone again) \u2192 409 PHONE_TAKEN",
+          "name": "POST /api/auth/signup (same phone again) → 409 PHONE_TAKEN",
           "request": {
             "method": "POST",
             "url": "{{baseUrl}}/api/auth/signup",
@@ -415,7 +415,7 @@
           ]
         },
         {
-          "name": "GET /api/auth/me (signed out) \u2192 401 NOT_SIGNED_IN",
+          "name": "GET /api/auth/me (signed out) → 401 NOT_SIGNED_IN",
           "request": {
             "method": "GET",
             "url": "{{baseUrl}}/api/auth/me",
@@ -439,7 +439,7 @@
           ]
         },
         {
-          "name": "POST /api/auth/signin (wrong password) \u2192 401 WRONG_LOGIN",
+          "name": "POST /api/auth/signin (wrong password) → 401 WRONG_LOGIN",
           "request": {
             "method": "POST",
             "url": "{{baseUrl}}/api/auth/signin",
@@ -663,7 +663,7 @@
       "name": "BE3 Team (signed in as an owner; set businessId first)",
       "item": [
         {
-          "name": "GET /api/team (no X-Business) \u2192 400 BUSINESS_REQUIRED",
+          "name": "GET /api/team (no X-Business) → 400 BUSINESS_REQUIRED",
           "request": {
             "method": "GET",
             "url": "{{baseUrl}}/api/team",
@@ -714,7 +714,7 @@
           ]
         },
         {
-          "name": "POST /api/team (new person \u2192 temporary password)",
+          "name": "POST /api/team (new person → temporary password)",
           "request": {
             "method": "POST",
             "url": "{{baseUrl}}/api/team",
@@ -989,6 +989,366 @@
               "script": {
                 "exec": [
                   "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "BE5 Sync (signed)",
+      "item": [
+        {
+          "name": "POST /api/sync/push (settings.update) — add the 4 signing headers from: npm run dev:sign -- headers --method POST --path /api/sync/push --business <id> --body '<the exact JSON below>'",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/sync/push",
+            "header": [
+              {
+                "key": "X-Requested-With",
+                "value": "XMLHttpRequest"
+              },
+              {
+                "key": "X-Business",
+                "value": "{{businessId}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"deviceId\":\"<your test device id>\",\"operations\":[{\"opId\":\"6d0f8a1e-2b3c-4d5e-8f9a-0b1c2d3e4f5a\",\"type\":\"settings.update\",\"recordedOnline\":true,\"payload\":{\"baseVersion\":1,\"changes\":{\"receiptNote\":\"Returns within 7 days\"}}}]}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('a result per operation', () => pm.expect(pm.response.json().results).to.have.length(1));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /api/sync/pull?since=0 — add the 4 signing headers from: npm run dev:sign -- headers --method GET --path /api/sync/pull?since=0 --business <id>",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/sync/pull?since=0",
+            "header": [
+              {
+                "key": "X-Requested-With",
+                "value": "XMLHttpRequest"
+              },
+              {
+                "key": "X-Business",
+                "value": "{{businessId}}"
+              }
+            ]
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('cursor fields', () => { const b = pm.response.json(); pm.expect(b).to.have.keys(['rows','nextCursor','hasMore','watermark']); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "BE6 Products (signed; owner phone)",
+      "item": [
+        {
+          "name": "POST /api/sync/push (product.upsert: add a sandal, then sizes 40 and 41) — add the 4 signing headers from: npm run dev:sign -- headers --method POST --path /api/sync/push --business <id> --body '<the exact JSON below>'",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/sync/push",
+            "header": [
+              {
+                "key": "X-Requested-With",
+                "value": "XMLHttpRequest"
+              },
+              {
+                "key": "X-Business",
+                "value": "{{businessId}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"deviceId\":\"<your test device id>\",\"operations\":[{\"opId\":\"0e5f6a7b-1111-4c2d-8e3f-4a5b6c7d8e01\",\"type\":\"product.upsert\",\"recordedOnline\":true,\"payload\":{\"productId\":\"d52137d3-810d-4235-a7b7-c66b25412e04\",\"baseVersion\":null,\"fields\":{\"name\":\"Black sandal\",\"type\":\"shoes\",\"unit\":\"pair\",\"retailMinor\":12000,\"wholesaleMinor\":10000,\"costMinor\":8000}}},{\"opId\":\"0e5f6a7b-2222-4c2d-8e3f-4a5b6c7d8e02\",\"type\":\"size.upsert\",\"recordedOnline\":true,\"payload\":{\"sizeId\":\"6c2e1f00-1a2b-4c3d-8e4f-5a6b7c8d9e0f\",\"productId\":\"d52137d3-810d-4235-a7b7-c66b25412e04\",\"baseVersion\":null,\"fields\":{\"label\":\"40\",\"sortOrder\":0}}},{\"opId\":\"0e5f6a7b-3333-4c2d-8e3f-4a5b6c7d8e03\",\"type\":\"size.upsert\",\"recordedOnline\":true,\"payload\":{\"sizeId\":\"6c2e1f00-1a2b-4c3d-8e4f-5a6b7c8d9e10\",\"productId\":\"d52137d3-810d-4235-a7b7-c66b25412e04\",\"baseVersion\":null,\"fields\":{\"label\":\"41\",\"sortOrder\":1,\"retailMinor\":13000}}}]}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('all saved', () => pm.response.json().results.forEach((r) => pm.expect(r.status).to.be.oneOf(['saved','duplicate'])));",
+                  "pm.test('version 1', () => pm.expect(pm.response.json().results[0].result.version).to.eql(1));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /api/sync/push (product.upsert: edit the price below cost → BELOW_COST warning) — add the 4 signing headers from: npm run dev:sign -- headers --method POST --path /api/sync/push --business <id> --body '<the exact JSON below>'",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/sync/push",
+            "header": [
+              {
+                "key": "X-Requested-With",
+                "value": "XMLHttpRequest"
+              },
+              {
+                "key": "X-Business",
+                "value": "{{businessId}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"deviceId\":\"<your test device id>\",\"operations\":[{\"opId\":\"0e5f6a7b-4444-4c2d-8e3f-4a5b6c7d8e04\",\"type\":\"product.upsert\",\"recordedOnline\":true,\"payload\":{\"productId\":\"d52137d3-810d-4235-a7b7-c66b25412e04\",\"baseVersion\":1,\"fields\":{\"retailMinor\":7000,\"wholesaleMinor\":6000}}}]}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('saved with a warning', () => { const r = pm.response.json().results[0]; pm.expect(r.status).to.be.oneOf(['saved','duplicate']); pm.expect(r.result.warnings.map((w) => w.code)).to.include('BELOW_COST'); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /api/sync/push (product.upsert: the same name again → PRODUCT_NAME_DUPLICATE, still saved) — add the 4 signing headers from: npm run dev:sign -- headers --method POST --path /api/sync/push --business <id> --body '<the exact JSON below>'",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/sync/push",
+            "header": [
+              {
+                "key": "X-Requested-With",
+                "value": "XMLHttpRequest"
+              },
+              {
+                "key": "X-Business",
+                "value": "{{businessId}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"deviceId\":\"<your test device id>\",\"operations\":[{\"opId\":\"0e5f6a7b-5555-4c2d-8e3f-4a5b6c7d8e05\",\"type\":\"product.upsert\",\"recordedOnline\":true,\"payload\":{\"productId\":\"d52137d3-810d-4235-a7b7-c66b25412e99\",\"baseVersion\":null,\"fields\":{\"name\":\"  black SANDAL\",\"type\":\"shoes\",\"unit\":\"pair\",\"retailMinor\":12000,\"costMinor\":8000}}}]}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('saved and warned', () => { const r = pm.response.json().results[0]; pm.expect(r.status).to.be.oneOf(['saved','duplicate']); pm.expect(r.result.warnings[0].code).to.eql('PRODUCT_NAME_DUPLICATE'); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /api/products/d52137d3-810d-4235-a7b7-c66b25412e04/history — add the 4 signing headers from: npm run dev:sign -- headers --method GET --path /api/products/d52137d3-810d-4235-a7b7-c66b25412e04/history --business <id>",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/products/d52137d3-810d-4235-a7b7-c66b25412e04/history",
+            "header": [
+              {
+                "key": "X-Requested-With",
+                "value": "XMLHttpRequest"
+              },
+              {
+                "key": "X-Business",
+                "value": "{{businessId}}"
+              }
+            ]
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('changes oldest first', () => pm.expect(pm.response.json().changes[0].before).to.eql(null));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "BE7 Stock (signed; run BE6 first; owner or manager phone)",
+      "item": [
+        {
+          "name": "stock.create: opening 10 of size 40 — sign with: npm run dev:sign -- headers --method POST --path /api/sync/push --business <id> --body '<the exact JSON below>'",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/sync/push",
+            "header": [
+              {
+                "key": "X-Requested-With",
+                "value": "XMLHttpRequest"
+              },
+              {
+                "key": "X-Business",
+                "value": "{{businessId}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"deviceId\":\"<your test device id>\",\"operations\":[{\"opId\":\"1a2b3c4d-1111-4e5f-8a9b-000000000001\",\"type\":\"stock.create\",\"recordedOnline\":true,\"payload\":{\"movementId\":\"5e6f7a8b-1111-4c2d-8e3f-000000000001\",\"type\":\"opening\",\"locationId\":\"<your shop's locationId from the pull>\",\"productId\":\"d52137d3-810d-4235-a7b7-c66b25412e04\",\"sizeId\":\"6c2e1f00-1a2b-4c3d-8e4f-5a6b7c8d9e0f\",\"quantityUnits\":10,\"recordedAt\":\"2026-11-10T08:00:00.000Z\"}}]}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('saved, stock 10', () => pm.expect(pm.response.json().results[0].result.stockOnHandUnits).to.eql(10));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "stock.create: removal of 12 (below zero: still saved and flagged) — sign with: npm run dev:sign -- headers --method POST --path /api/sync/push --business <id> --body '<the exact JSON below>'",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/sync/push",
+            "header": [
+              {
+                "key": "X-Requested-With",
+                "value": "XMLHttpRequest"
+              },
+              {
+                "key": "X-Business",
+                "value": "{{businessId}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"deviceId\":\"<your test device id>\",\"operations\":[{\"opId\":\"1a2b3c4d-2222-4e5f-8a9b-000000000002\",\"type\":\"stock.create\",\"recordedOnline\":true,\"payload\":{\"movementId\":\"5e6f7a8b-2222-4c2d-8e3f-000000000002\",\"type\":\"removal\",\"reason\":\"damaged\",\"note\":\"Rain damage\",\"locationId\":\"<your shop's locationId from the pull>\",\"productId\":\"d52137d3-810d-4235-a7b7-c66b25412e04\",\"sizeId\":\"6c2e1f00-1a2b-4c3d-8e4f-5a6b7c8d9e0f\",\"quantityUnits\":12,\"recordedAt\":\"2026-11-10T09:00:00.000Z\"}}]}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('flagged belowZeroOnArrival', () => pm.expect(pm.response.json().results[0].result.flags.belowZeroOnArrival).to.eql(true));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "stockCount.create: counted 3, the phone showed -2 — sign with: npm run dev:sign -- headers --method POST --path /api/sync/push --business <id> --body '<the exact JSON below>'",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/sync/push",
+            "header": [
+              {
+                "key": "X-Requested-With",
+                "value": "XMLHttpRequest"
+              },
+              {
+                "key": "X-Business",
+                "value": "{{businessId}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"deviceId\":\"<your test device id>\",\"operations\":[{\"opId\":\"1a2b3c4d-3333-4e5f-8a9b-000000000003\",\"type\":\"stockCount.create\",\"recordedOnline\":true,\"payload\":{\"countId\":\"5e6f7a8b-3333-4c2d-8e3f-000000000003\",\"locationId\":\"<your shop's locationId from the pull>\",\"productId\":\"d52137d3-810d-4235-a7b7-c66b25412e04\",\"sizeId\":\"6c2e1f00-1a2b-4c3d-8e4f-5a6b7c8d9e0f\",\"countedUnits\":3,\"baselineUnits\":-2,\"baselineCursor\":0,\"reason\":\"miscounted_before\",\"recordedAt\":\"2026-11-10T10:00:00.000Z\"}}]}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('difference +5, stock 3', () => { const r = pm.response.json().results[0].result; pm.expect(r.differenceUnits).to.eql(5); pm.expect(r.stockOnHandUnits).to.eql(3); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "size.upsert: remove size 40 while it has stock → SIZE_HAS_STOCK — sign with: npm run dev:sign -- headers --method POST --path /api/sync/push --business <id> --body '<the exact JSON below>'",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/sync/push",
+            "header": [
+              {
+                "key": "X-Requested-With",
+                "value": "XMLHttpRequest"
+              },
+              {
+                "key": "X-Business",
+                "value": "{{businessId}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"deviceId\":\"<your test device id>\",\"operations\":[{\"opId\":\"1a2b3c4d-4444-4e5f-8a9b-000000000004\",\"type\":\"size.upsert\",\"recordedOnline\":true,\"payload\":{\"sizeId\":\"6c2e1f00-1a2b-4c3d-8e4f-5a6b7c8d9e0f\",\"productId\":\"d52137d3-810d-4235-a7b7-c66b25412e04\",\"baseVersion\":1,\"fields\":{\"isActive\":false}}}]}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('SIZE_HAS_STOCK', () => pm.expect(pm.response.json().results[0].error.code).to.eql('SIZE_HAS_STOCK'));"
                 ]
               }
             }
