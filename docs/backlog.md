@@ -390,7 +390,7 @@ From Part 1, Epic 1.
 - **AC1: Add a product.** Given I'm the owner, when I enter a name, choose a type (clothing, shoes, fabric, or other), a unit, and its prices, and save, then the product appears in my product list straight away, even with no internet.
 - **AC2: Name required.** Given I'm adding a product, when the name is empty or only spaces, then it isn't saved and I see "Enter a product name."
 - **AC3: Name length.** Given I'm adding a product, when the name is longer than 80 characters, then it isn't saved and I see "Use a shorter name (up to 80 characters)."
-- **AC4: Duplicate name.** Given my business already has a product called "Black sandal", when I add another "black sandal" (any capitals or extra spaces), then I'm warned "You already have a product with this name" and can change it or open the existing one.
+- **AC4: Duplicate name.** Given my business already has a product called "Black sandal", when I add another "black sandal" (any capitals or extra spaces), then I'm warned "You already have a product with this name" and can change it or open the existing one. If I save it anyway, or two phones added the same name offline, both products are kept, so no sale of either is lost, and the one the server receives second is warned. The same applies to two sizes of one product with the same label.
 - **AC5: Starting stock.** Given I'm adding a product, when I enter a starting quantity (for each size, if it has sizes), then that stock is recorded as the product's first stock entry, with my name and the date.
 - **AC6: Business only.** Given I add a product, then it belongs only to my business, and no other business can ever see it.
 
@@ -427,9 +427,9 @@ From Part 1, Epic 1.
 
 ### Editing and hiding
 
-- **AC26: Edit.** Given I'm the owner, when I change a product's name, type details, unit, or prices and save, then the changes appear on every team member's phone after they sync.
-- **AC27: Hide.** Given I'm the owner, when I hide a product, then it no longer appears in the list for selling, but past sales, debts, and reports still show it by name.
-- **AC28: Show hidden.** Given I'm the owner, when I choose "Show hidden products", then I can see and un-hide them.
+- **AC26: Edit.** Given I'm the owner or a manager, when I change a product's name, type details, unit, or selling prices (only the owner sees or changes cost prices) and save, then the changes appear on every team member's phone after they sync.
+- **AC27: Hide.** Given I'm the owner or a manager, when I hide a product, then it no longer appears in the list for selling, but past sales, debts, and reports still show it by name.
+- **AC28: Show hidden.** Given I'm the owner or a manager, when I choose "Show hidden products", then I can see and un-hide them.
 - **AC29: Never deleted.** Given a product has ever been sold or stocked, then it can't be deleted, only hidden.
 - **AC30: Who changed it.** Given a product's prices or name are changed, then the change is recorded with who made it and when, and the owner can see the history.
 
@@ -591,8 +591,8 @@ From Part 1, Epic 2. ## Step 1: Acceptance criteria
 
 ### Counting stock
 
-- **AC10: Record a count.** Given I'm the owner or manager, when I count a size and enter the number on the shelf, then the app records the difference as an adjustment (for example, "Counted 4, expected 6: −2") with my name.
-- **AC11: Reason for a difference.** Given a count differs from the expected stock, then a reason is required before saving; given it matches, the count is saved as "Checked, correct" with no reason.
+- **AC10: Record a count.** Given I'm the owner or manager, when I count a size and enter the number on the shelf, then the count is saved with my name and I see the difference from what was expected (for example, "Counted 4, expected 6: −2"). The count records what was on the shelf; the difference is worked out, so if another phone's sale from before the count arrives later, the difference corrects itself.
+- **AC11: Reason for a difference.** Given a count differs from what my phone showed, then I must choose a reason (**Damaged**, **Lost or stolen**, **Miscounted before**, or **Other**, which needs a written note) before saving; given it matches, the count is saved as "Checked, correct" with no reason.
 - **AC12: Counting during the day close.** Given the manager is closing the day, then the spot-check of shelves uses this same count screen.
 
 ### Seeing stock
@@ -644,7 +644,7 @@ As a shop owner or manager, I want to remove damaged, lost, or returned items wi
 
 As a manager, I want to type what I counted and let the app work out the difference, so that I don't do sums at closing time.
 
-**Technical notes:** the phone sends the **difference** it calculated and the counted number. If other phones' sales arrive later, the server keeps the difference as sent and recalculates stock from all movements; a count is a snapshot, not an overwrite (F-7).
+**Technical notes:** the phone sends the **counted number** and what it showed (the baseline), never a difference. Stock afterwards is the count plus the movements recorded after it, and the difference is worked out from the records, so it corrects itself when other phones' sales arrive late (Story 2.9, ADR-24).
 
 ### Story 2.4: Stock list by product and size
 

@@ -10,6 +10,7 @@
 
 // Payment methods, by global code. A country lists the ones it offers and
 // what each is called there (mobile money is "MoMo" in Ghana).
+const { SIZE_RANGES } = require('../catalog/sizeRanges');
 const PAYMENT_METHODS = Object.freeze({
   cash: { code: 'cash', name: 'Cash' },
   mobile_money: { code: 'mobile_money', name: 'Mobile money' },
@@ -91,6 +92,7 @@ function referenceData() {
     currencies: Object.values(CURRENCIES).map((c) => ({ ...currencyForPhone(c.code), name: c.name })),
     languages: Object.values(LANGUAGES),
     paymentMethods: Object.values(PAYMENT_METHODS),
+    sizeRanges: SIZE_RANGES, // ready-made size ranges (BE6, src/catalog/sizeRanges.js)
     defaults: { country: DEFAULT_COUNTRY, language: FALLBACK_LANGUAGE },
   };
 }

@@ -36,6 +36,21 @@ async function buildBusiness(label) {
   const removed = await add(`Removed ${label}`, signupBody().phone);
   await agent.delete(`/api/team/${removed.body.member.membershipId}`).set(biz(businessId));
   const ownerDevice = await agent.registerIn(businessId);
+  const productId = randomUUID();
+  const sizeId = randomUUID();
+  await agent.post('/api/sync/push').set(biz(businessId)).send({
+    deviceId: ownerDevice.deviceId,
+    operations: [
+      { opId: randomUUID(), type: 'product.upsert', payload: { productId, baseVersion: null, fields: { name: `Sandal ${label}`, type: 'shoes', unit: 'pair', retailMinor: 12000, costMinor: 8000 } } },
+      { opId: randomUUID(), type: 'size.upsert', payload: { sizeId, productId, baseVersion: null, fields: { label: '40', sortOrder: 0 } } },
+    ],
+  });
+  const locationId = (await db.getModels().Location.findOne({ where: { businessId } })).id;
+  const movementId = randomUUID();
+  await agent.post('/api/sync/push').set(biz(businessId)).send({
+    deviceId: ownerDevice.deviceId,
+    operations: [{ opId: randomUUID(), type: 'stock.create', payload: { movementId, type: 'opening', locationId, productId, sizeId, quantityUnits: 5, recordedAt: new Date().toISOString() } }],
+  });
 
   return {
     label, agent, businessId, ownerId: res.body.user.id, ownerPhone: body.phone, ownerPassword: body.password,
@@ -43,7 +58,7 @@ async function buildBusiness(label) {
     invitedId: invited.body.member.membershipId, invitee,
     removedId: removed.body.member.membershipId,
     memberIds: [staff.body.member.membershipId, invited.body.member.membershipId, removed.body.member.membershipId],
-    deviceId: ownerDevice.deviceId, deviceCode: ownerDevice.deviceCode,
+    deviceId: ownerDevice.deviceId, deviceCode: ownerDevice.deviceCode, productId, sizeId, locationId, movementId,
   };
 }
 
@@ -82,12 +97,56 @@ const CASES = {
     expect(res.body.results[0].status).toBe('saved');
     const bAfter = await db.getModels().BusinessSettings.findByPk(B.businessId);
     expect([bAfter.businessName, bAfter.version]).toEqual([bBefore.businessName, bBefore.version]);
+
+    // A's product and size operations naming B's product or size: B's records never change.
+    const productBefore = await db.getModels().Product.findByPk(B.productId);
+    const sizeBefore = await db.getModels().ProductSize.findByPk(B.sizeId);
+    const tries = await A.agent.post('/api/sync/push').set(biz(A.businessId)).send({
+      deviceId: A.deviceId,
+      operations: [
+        { opId: randomUUID(), type: 'product.upsert', payload: { productId: B.productId, baseVersion: 1, fields: { retailMinor: 1 } } },
+        { opId: randomUUID(), type: 'product.upsert', payload: { productId: B.productId, baseVersion: null, fields: { name: 'Taken over', type: 'other', unit: 'piece', retailMinor: 1, costMinor: 1 } } },
+        { opId: randomUUID(), type: 'size.upsert', payload: { sizeId: randomUUID(), productId: B.productId, baseVersion: null, fields: { label: 'X', sortOrder: 0 } } },
+        { opId: randomUUID(), type: 'size.upsert', payload: { sizeId: B.sizeId, productId: A.productId, baseVersion: 1, fields: { label: 'X' } } },
+      ],
+    });
+    // An edit of B's product answers exactly like an unknown product; a NEW
+    // product with B's (random, unguessable) ID is refused without saying more.
+    expect(tries.body.results.map((r) => r.error.code)).toEqual(['NOT_FOUND', 'ID_TAKEN', 'NOT_FOUND', 'NOT_FOUND']);
+    const productAfter = await db.getModels().Product.findByPk(B.productId);
+    const sizeAfter = await db.getModels().ProductSize.findByPk(B.sizeId);
+    expect([productAfter.name, productAfter.version, productAfter.businessId]).toEqual([productBefore.name, productBefore.version, B.businessId]);
+    expect([sizeAfter.label, sizeAfter.version, sizeAfter.productId]).toEqual([sizeBefore.label, sizeBefore.version, B.productId]);
+
+    // Stock operations naming B's product, size or shop: answered like unknown ones, B's stock untouched.
+    const { StockMovement, StockCount } = db.getModels();
+    const bMovements = await StockMovement.count({ where: { businessId: B.businessId } });
+    const now = new Date().toISOString();
+    const stockTries = await A.agent.post('/api/sync/push').set(biz(A.businessId)).send({
+      deviceId: A.deviceId,
+      operations: [
+        { opId: randomUUID(), type: 'stock.create', payload: { movementId: randomUUID(), type: 'removal', reason: 'lost', locationId: A.locationId, productId: B.productId, sizeId: B.sizeId, quantityUnits: 1, recordedAt: now } },
+        { opId: randomUUID(), type: 'stock.create', payload: { movementId: randomUUID(), type: 'restock', locationId: B.locationId, productId: A.productId, sizeId: A.sizeId, quantityUnits: 1, recordedAt: now } },
+        { opId: randomUUID(), type: 'stockCount.create', payload: { countId: randomUUID(), locationId: A.locationId, productId: B.productId, sizeId: B.sizeId, countedUnits: 0, baselineUnits: 0, baselineCursor: 0, recordedAt: now } },
+        { opId: randomUUID(), type: 'stock.create', payload: { movementId: B.movementId, type: 'restock', locationId: A.locationId, productId: A.productId, sizeId: A.sizeId, quantityUnits: 1, recordedAt: now } },
+      ],
+    });
+    expect(stockTries.body.results.map((r) => r.error.code)).toEqual(['NOT_FOUND', 'NOT_FOUND', 'NOT_FOUND', 'ID_TAKEN']);
+    expect(await StockMovement.count({ where: { businessId: B.businessId } })).toBe(bMovements);
+    expect(await StockCount.count({ where: { businessId: B.businessId } })).toBe(0);
+    expect((await StockMovement.findByPk(B.movementId)).businessId).toBe(B.businessId);
+  },
+  'GET /api/products/:productId/history': async () => {
+    await expectSameAsUnknown('GET', (id) => `/api/products/${id}/history`, undefined, B.productId);
+    const own = await A.agent.get(`/api/products/${A.productId}/history`).set(biz(A.businessId));
+    expect(own.status).toBe(200);
+    expect(JSON.stringify(own.body)).not.toContain(B.productId);
   },
   'GET /api/sync/pull': async () => {
     const res = await A.agent.get('/api/sync/pull?since=0').set(biz(A.businessId));
     expect(res.status).toBe(200);
     const text = JSON.stringify(res.body);
-    for (const leak of [B.businessId, B.ownerId, B.deviceId, 'Shop B', 'Owner B', 'Staff B', ...B.memberIds]) expect(text).not.toContain(leak);
+    for (const leak of [B.businessId, B.ownerId, B.deviceId, B.productId, B.sizeId, B.locationId, B.movementId, 'Shop B', 'Owner B', 'Staff B', 'Sandal B', ...B.memberIds]) expect(text).not.toContain(leak);
   },
   'POST /api/devices/challenge': async () => {
     const before = await db.getModels().DeviceChallenge.count({ where: { businessId: B.businessId } });
@@ -159,7 +218,7 @@ describe("A's people against B's records", () => {
 
   test("X-Business set to B gives the same 404 as a random business, on every business route", async () => {
     for (const route of routes.filter((r) => r.business)) {
-      const url = route.path.replace(':membershipId', B.staffId).replace(':deviceId', B.deviceId);
+      const url = route.path.replace(':membershipId', B.staffId).replace(':deviceId', B.deviceId).replace(':productId', B.productId);
       const body = route.method === 'GET' || route.method === 'DELETE' ? undefined : { name: 'X', phone: '0201112233', role: 'manager' };
       const withB = await call(A.agent, route.method, url, biz(B.businessId), body);
       const withRandom = await call(A.agent, route.method, url, biz(randomUUID()), body);

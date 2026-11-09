@@ -112,7 +112,7 @@ async function stampSequence(models, transaction, businessId, rows) {
 // chosen business, user, membership and device (from requireAuth and
 // requireDevice); `definition` is the operation type's { roles, handler }.
 // Returns { status: 'saved'|'duplicate'|'rejected', result?, error? }.
-async function runOperation(deps, { context, opId, type, payload, definition }) {
+async function runOperation(deps, { context, opId, type, payload, definition, recordedOnline = false }) {
   const models = deps.getModels();
   const { business, user, membership, device } = context;
   const businessId = business.id;
@@ -148,7 +148,7 @@ async function runOperation(deps, { context, opId, type, payload, definition }) 
       let result;
       try {
         result = await withSavepoint(transaction, (savepoint) => definition.handler(
-          makeContext({ models, transaction: savepoint, business, user, membership, device, now, stamps }),
+          makeContext({ models, transaction: savepoint, business, user, membership, device, now, stamps, opId, recordedOnline }),
           payload,
         ));
       } catch (err) {
@@ -185,9 +185,9 @@ async function answerRepeat(models, { businessId, opId, deviceId, type, payloadH
 }
 
 // What a handler receives: the transaction, the business's scoped models,
-// who is doing it, and three tools: lock (in the global order), stamp (this
+// who is doing it, the operation's opId, and three tools: lock (in the global order), stamp (this
 // synced row was inserted or changed) and reject (a business-rule failure).
-function makeContext({ models, transaction, business, user, membership, device, now, stamps }) {
+function makeContext({ models, transaction, business, user, membership, device, now, stamps, opId, recordedOnline }) {
   let lastRank = -1;
   return {
     models,
@@ -198,6 +198,8 @@ function makeContext({ models, transaction, business, user, membership, device, 
     membership,
     device,
     now,
+    opId, // this operation's ID (PriceVersion keeps it, so a sale can name an edit by its opId)
+    recordedOnline, // the phone's (untrusted) hint that it had a connection when the record was made (clockSkew flag)
     // Locks rows of a business model (FOR UPDATE) as step `kind` of the
     // global order; refuses to go backwards in that order.
     async lock(kind, model, where) {

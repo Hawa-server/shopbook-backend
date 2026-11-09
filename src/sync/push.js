@@ -61,7 +61,7 @@ async function processPush(deps, context, rawOperations) {
       results.push(invalid(envelope.data.opId, 'INVALID_PAYLOAD', 'Check the highlighted fields.', fieldsOf(parsed.error)));
       continue;
     }
-    const outcome = await runOperation(deps, { context, opId: envelope.data.opId, type, payload: parsed.data, definition });
+    const outcome = await runOperation(deps, { context, opId: envelope.data.opId, type, payload: parsed.data, definition, recordedOnline: envelope.data.recordedOnline });
     results.push({ opId: envelope.data.opId, ...outcome });
   }
   return results;

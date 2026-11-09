@@ -8,6 +8,9 @@ The contract between the Shop Book server and the phone app. **The app uses only
 
 Newest first.
 
+- **BE7 (Stock):** sync operations **`stock.create`** (opening, restock, removal) and **`stockCount.create`** (owner and manager; associates `FORBIDDEN`), pull row types **`stockMovement`** and **`stockCount`** (everyone; associates get only the fields the stock rule needs), **the stock rule** (stock on hand, a count's difference, "check this count") with shared test fixtures, movement `flags` (`belowZeroOnArrival`, `clockSkew`), product fields `lowStockLevelUnits` and `lowStockWarnings`. New push rejection codes: `SIZE_HAS_STOCK` (removing a size that still has stock), `UNIT_LOCKED` (switching between yards and other units once there's stock). New enums: stock movement `type`, removal `reason`, count `reason`.
+- **BE6 (Products, sizes and prices):** sync operations **`product.upsert`** and **`size.upsert`** (owner and manager; cost prices owner only), pull row types **`product`** and **`size`** (everyone; **`costMinor` only in the owner's rows**, absent for everyone else), push results with **`warnings`** (`WHOLESALE_ABOVE_RETAIL`, `BELOW_COST` for the owner only, `PRODUCT_NAME_DUPLICATE`, `SIZE_LABEL_DUPLICATE`: never errors), new endpoint **`GET /api/products/:productId/history`** (owner and manager), and **`sizeRanges`** in `GET /api/reference`. New push rejection codes: `NOT_FOUND`, `ID_TAKEN`, `SIZES_NOT_ALLOWED`. New enums: product `type`, `unit`.
+- **BE5.5 (Sync torture test):** no change to any endpoint, operation or row type. The server's sync is now tested under repeats, lost answers, failures halfway through a batch, deadlocks, wrong phone clocks and five phones at once. What the app must do is unchanged: keep each operation's `opId` until it gets `saved`, `duplicate` or `rejected`; on a lost answer or a 5xx, send the same operations again as a **new signed request** (new nonce); on `CLOCK_OUT_OF_RANGE`, correct the clock from `X-Server-Time` and retry.
 - **BE5 Part B (Sync):** `POST /api/sync/push` and `GET /api/sync/pull`, the first sync operation **`settings.update`**, the pull row types `settings`, `location`, `membership` and `device` (memberships and devices to the owner only). Per-operation results `saved`, `duplicate`, `rejected` (codes `INVALID_PAYLOAD`, `UNKNOWN_OPERATION`, `OP_ID_CONFLICT`, `FORBIDDEN`, `VALIDATION_FAILED`). Sync is limited to 120 requests per 15 minutes per person. Every synced row has a `serverSeq`; team, phone and settings changes made through other endpoints also appear in the pull.
 - **BE5 Part A (Phones and signed requests):** **every business endpoint is now signed** with the phone's own key (four headers: `X-Device-Id`, `X-Signed-At`, `X-Nonce`, `X-Signature`; exact text in Conventions), except the two registration endpoints. Every response carries **`X-Server-Time`**. New endpoints: `POST /api/devices/challenge`, `POST /api/devices` (register this phone: password + signed challenge), `GET /api/devices`, `DELETE /api/devices/:deviceId` (owner). Removing a member now also revokes their phones for that business. New error codes: `DEVICE_NOT_REGISTERED`, `DEVICE_REVOKED`, `DEVICE_SIGNATURE_INVALID`, `CLOCK_OUT_OF_RANGE`, `NONCE_REUSED`, `CHALLENGE_INVALID`, `DEVICE_KEY_INVALID`, `DEVICE_ID_TAKEN`, `DEVICE_ALREADY_REVOKED`; `RATE_LIMITED` also when a phone is locked after failed signatures.
 - **BE4.5 (International-ready, Ghana first):** money is described in **minor units** of the business's currency (field names end in `Minor`; GHS has 2 decimals, so `12000` = GH₵ 120.00): format it with the business's `currency` rules, not `Intl.NumberFormat`. Phone numbers are **E.164** (`+233…`). Business dates use the **business's time zone**. `language` is an open list of supported tags (launch `en`, `tw`) from the new **`GET /api/reference`** (countries, currencies, languages, payment methods with their names: mobile money is "MoMo" in Ghana). `me.businesses[]` gains `country`, `currency`, `timezone`, `defaultLanguage`, `paymentMethods`, `localeLocked`. Sign-up takes an optional `country` (default `GH`, the only one at launch); sign-in, forgot password and change phone take an optional `country` for reading local numbers. New endpoint `PATCH /api/business/locale` (owner) and error `409 CURRENCY_LOCKED`. The phone `VALIDATION_FAILED` message is now "Enter a valid mobile number, for example 024 123 4567."
@@ -136,7 +139,7 @@ Decide what to do from **`code`** (stable), never from `message` (wording may ch
 
 | Code | HTTP | Meaning | What the app should do |
 |---|---|---|---|
-| `NOT_FOUND` | 404 | No such endpoint, or a record that doesn't exist **or belongs to another business** (the server never says which). | Treat as a bug for endpoints; for a record, show "Not found". Don't retry. |
+| `NOT_FOUND` | 404, or (push result) | No such endpoint, or a record that doesn't exist **or belongs to another business** (the server never says which). As a push result: the operation edits a product or size the server doesn't have (for example an edit sent without its create). | Treat as a bug for endpoints; for a record, show "Not found". Don't retry. In a push: "Needs attention". |
 | `CSRF_HEADER_MISSING` | 403 | A `POST`/`PUT`/`PATCH`/`DELETE` without `X-Requested-With: XMLHttpRequest`. | App bug: the shared API helper must always send it. Don't retry. Report via Help. |
 | `ORIGIN_NOT_ALLOWED` | 403 | The browser said the request came from another website. | Shouldn't happen from the app; don't retry. Report via Help. |
 | `INVALID_JSON` | 400 | The body isn't valid JSON. | App bug; don't retry. |
@@ -178,6 +181,10 @@ Decide what to do from **`code`** (stable), never from `message` (wording may ch
 | `DEVICE_ALREADY_REVOKED` | 409 | The owner tried to revoke a phone that's already revoked. | Refresh the phone list. |
 | `INVALID_PAYLOAD` | (push result) | An operation or its payload is malformed. `fields` says where. Nothing was stored for it. | "Needs attention": app bug. A corrected operation may reuse the same `opId`. |
 | `UNKNOWN_OPERATION` | (push result) | The operation `type` doesn't exist (yet). | "Needs attention": app bug or an app newer than the server. |
+| `ID_TAKEN` | (push result) | A **new** product or size was sent with an ID that's already used (in practice never, with `crypto.randomUUID()`). Nothing applied. | "Needs attention": app bug. Make a new ID for the record. |
+| `SIZE_HAS_STOCK` | (push result) | A size that still has stock (above or below zero) can't be removed. `message` and `fields.isActive`: "This size still has 3 in stock." | Show the message; offer to remove the stock or count it first. |
+| `UNIT_LOCKED` | (push result) | A product with stock records can't switch between yards and another unit (stored quantities would change meaning). | Show the message; the person can add a new product instead. |
+| `SIZES_NOT_ALLOWED` | (push result) | A size for a fabric product, or a product with sizes changed to fabric. | "Needs attention" with "Fabric has no sizes." |
 | `OP_ID_CONFLICT` | (push result) | This `opId` was already used for a different operation (other device, type or payload). Nothing applied. | "Needs attention" marked "App problem: tell the developer"; include it in the Help message. |
 | `INTERNAL_ERROR` | 500 | Something unexpected went wrong on the server. `message` is "Something went wrong. Reference: \<request id\>". | **Temporary:** keep any unsent records and retry later. Keep the reference (also in `X-Request-Id`) for the Help message. |
 
@@ -247,11 +254,17 @@ The supported countries, currencies, languages and payment methods, with the nam
       { "tag": "tw", "name": "Twi", "nativeName": "Twi", "status": "draft" }
     ],
     "paymentMethods": [{ "code": "cash", "name": "Cash" }, { "code": "mobile_money", "name": "Mobile money" }],
+    "sizeRanges": [
+      { "code": "shoes_eu", "name": "Shoe sizes (30–46)", "forTypes": ["shoes"], "sizes": ["30", "31", "…", "46"] },
+      { "code": "clothing_letters", "name": "Clothing sizes (XS–XXXL)", "forTypes": ["clothing"], "sizes": ["XS", "S", "M", "L", "XL", "XXL", "XXXL"] },
+      { "code": "children_years", "name": "Children's ages (1Y–12Y)", "forTypes": ["clothing", "shoes"], "sizes": ["1Y", "2Y", "…", "12Y"] }
+    ],
     "defaults": { "country": "GH", "language": "en" }
   }
   ```
 
 - A country's `paymentMethods[].name` is what to show **in that country** (mobile money is "MoMo" in Ghana); the top-level list has the general names. A language with `status: "draft"` isn't fully translated: show English for missing texts. At launch there's one country (Ghana), so the country picker can be preselected and hidden.
+- **`sizeRanges`** (since BE6): ready-made size ranges for adding a product, in their natural order. The person picks a range and its first and last size (for example shoes 30 to 40); the app makes **one `size.upsert` per size**, with `sortOrder` = its position in the range (0, 1, 2…). Custom sizes ("1Y, 2Y, 3Y") are typed and pushed the same way. `forTypes` says which product types to offer each range for. The server stores only individual sizes; ranges may be added later.
 - **Errors:** none. **Rate limit:** none. **Available since:** BE4.5.
 
 ### PATCH /api/business/locale
@@ -725,6 +738,52 @@ Removes a member from **this** business, or cancels a pending invitation. **Thei
 
 ---
 
+## Products
+
+Products and sizes are added and changed **through sync** (`product.upsert`, `size.upsert`) and arrive in the pull. This section has only what sync can't give.
+
+### GET /api/products/:productId/history
+
+Who changed a product and its sizes, and what changed (AC30): the product screen's "History".
+
+- **Who:** owner and manager (associates: `403 FORBIDDEN`). **Business:** yes. **Signed:** yes.
+- **Request:** no body.
+- **Response 200:**
+
+  ```json
+  {
+    "changes": [
+      {
+        "entity": "product", "entityId": "d521…",
+        "changedBy": { "userId": "407f…", "name": "Ama Mensah" }, "changedAt": "2026-11-08T09:00:00.000Z",
+        "before": null,
+        "after": { "name": "Black sandal", "type": "shoes", "unit": "pair", "unitLabel": null, "retailMinor": 12000, "wholesaleMinor": 10000, "costMinor": 8000, "isHidden": false, "version": 1 },
+        "conflict": false
+      },
+      {
+        "entity": "size", "entityId": "6c2e…",
+        "changedBy": { "userId": "8c7b…", "name": "Kofi Boateng" }, "changedAt": "2026-11-08T10:15:00.000Z",
+        "before": { "retailMinor": null, "productId": "d521…", "version": 1 },
+        "after": { "retailMinor": 14000, "productId": "d521…", "version": 2 },
+        "conflict": false
+      }
+    ]
+  }
+  ```
+
+| Field | Meaning |
+|---|---|
+| `changes` | Oldest first, in the order the server saved them: the product's changes and its sizes'. |
+| `entity` | `product` or `size`. |
+| `entityId` | The product's or size's ID. |
+| `changedBy` | Who made the change (`name` as it is now), or `null` for a system change. |
+| `before` / `after` | The fields that changed, with the version before and after. `before` is `null` when the record was created. Money in minor units. |
+| `conflict` | `true` when the change was made from an older version than the one saved (someone else had changed it first). Show "Changed at the same time as another phone": the later one received won. |
+
+- **Cost:** for a **manager**, `costMinor` is removed from every `before`/`after`, and a change that was only about cost isn't listed at all.
+- **Errors:** `404 NOT_FOUND` (no such product in this business), plus the business-endpoint errors.
+- **Rate limit:** none. **Available since:** BE6.
+
 ---
 
 ## Sync
@@ -778,11 +837,11 @@ Sends the outbox: at most **200** operations, **oldest first**. Each is processe
 
 | `status` | Meaning | What the app does |
 |---|---|---|
-| `saved` | Applied now. `result` holds what the type returns (e.g. the new `version`). | Store the result on the local record; remove the operation from the outbox (in one local transaction). |
+| `saved` | Applied now. `result` holds what the type returns (e.g. the new `version`, and for products and sizes `warnings`). | Store the result on the local record; remove the operation from the outbox (in one local transaction). Show any `warnings` (they never undo the save). |
 | `duplicate` | Already applied earlier (a retry whose first answer was lost). `result` is the same as the first time. | Exactly as for `saved`. Nothing was applied twice. |
 | `rejected` | Refused, **permanently**: sending it again will always give the same answer. `error.code` says why (and `error.fields` for a payload problem). | Move it to **"Needs attention"** with the message; never drop it silently. `OP_ID_CONFLICT`: mark "App problem: tell the developer" (it means this phone sent two different things with one ID, a bug). |
 
-Rejection codes in results: `INVALID_PAYLOAD` (the operation or its payload is malformed; `fields` says where; nothing was stored, so a **corrected** operation may reuse the `opId`), `UNKNOWN_OPERATION` (no such type), `OP_ID_CONFLICT`, `FORBIDDEN` (this person's role can't do it), `VALIDATION_FAILED` (a business rule, with `fields`). Each type lists its own.
+Rejection codes in results: `INVALID_PAYLOAD` (the operation or its payload is malformed; `fields` says where, as a path inside the payload, e.g. `fields.name`; nothing was stored, so a **corrected** operation may reuse the `opId`), `UNKNOWN_OPERATION` (no such type), `OP_ID_CONFLICT`, `FORBIDDEN` (this person's role can't do it), `VALIDATION_FAILED` (a business rule, with `fields`), `NOT_FOUND`, `ID_TAKEN`, `SIZES_NOT_ALLOWED`, `SIZE_HAS_STOCK`, `UNIT_LOCKED`. Each type lists its own.
 
 - **Errors (the whole request):** `400 VALIDATION_FAILED` (`deviceId`, too many operations), `429 RATE_LIMITED`, plus the business-endpoint errors. **Any 5xx, a timeout or a network error is temporary**: keep every operation in the outbox and push again later (operations already saved come back as `duplicate`). A 5xx is never a rejection.
 - **Rate limit:** 120 sync requests (push and pull together) per 15 minutes per person. **Available since:** BE5.
@@ -851,6 +910,265 @@ The owner changes the business's settings (More → Business settings). Editable
 - **Result (`saved`):** `{ "version": 3 }`, the new version. Update the local settings row; the full row also comes in the next pull.
 - **Rejected:** `FORBIDDEN`, `INVALID_PAYLOAD` (`fields`), `VALIDATION_FAILED` (`fields.paymentMethods`: a method not offered in this country).
 
+#### `product.upsert`
+
+Adds a product, or edits one (name, type, unit, prices, hide/show). One operation per product; its sizes are separate `size.upsert` operations **after** it in the outbox.
+
+- **Who:** owner and manager (associates: `rejected` `FORBIDDEN`). **Only the owner may send `costMinor`**: from a manager the operation is rejected `FORBIDDEN` (`fields.costMinor`); never put a cost field in a manager's form. **Since:** BE6.
+- **Add** (`baseVersion: null`, a new `productId` made with `crypto.randomUUID()` when the person saves):
+
+  ```json
+  {
+    "productId": "d52137d3-810d-4235-a7b7-c66b25412e04",
+    "baseVersion": null,
+    "fields": { "name": "Black sandal", "type": "shoes", "unit": "pair", "retailMinor": 12000, "wholesaleMinor": 10000, "costMinor": 8000 }
+  }
+  ```
+
+- **Edit** (`baseVersion`: the product's `version` on the phone when the person started editing; only the fields that changed):
+
+  ```json
+  { "productId": "d52137d3-810d-4235-a7b7-c66b25412e04", "baseVersion": 1, "fields": { "retailMinor": 13000, "isHidden": false } }
+  ```
+
+| Field | Rules |
+|---|---|
+| `productId` | UUID made on the phone. |
+| `baseVersion` | `null` to add; the version edited, to edit. Editing an unknown product: `NOT_FOUND`; adding with an ID the business already has: `VALIDATION_FAILED` (`fields.baseVersion`). |
+| `fields` | At least one field; any other field is refused (`INVALID_PAYLOAD`). |
+| `fields.name` | 1–80 characters (spaces at the ends and doubled spaces are removed). **Required to add.** Messages: "Enter a product name.", "Use a shorter name (up to 80 characters)." |
+| `fields.type` | `clothing`, `shoes`, `fabric` or `other`. **Required to add.** |
+| `fields.unit` | `piece`, `pair`, `set`, `dozen`, `yard` or `custom` (the shop's own word, in `unitLabel`). Fabric: `piece` or `yard` only (`VALIDATION_FAILED`, `fields.unit`: "Fabric is sold by the piece or by the yard."). **Required to add.** |
+| `fields.unitLabel` | 1–20 characters, required when `unit` is `custom` ("Enter the unit's name."); ignored (stored as `null`) for other units. |
+| `fields.retailMinor` | Integer, minor units, from 1 up to 1,000,000 in the business's currency (GH₵ 1,000,000.00 = `100000000`). **Required to add.** Above the limit: `VALIDATION_FAILED` (`fields.retailMinor`). |
+| `fields.wholesaleMinor` | Same range, or `null` (none: wholesale sales use the retail price). |
+| `fields.costMinor` | Same range, or `null`. **Owner only.** **Required when the owner adds** a product (`VALIDATION_FAILED`, `fields.costMinor`: "Enter the cost price."); a manager's product is saved without it and shows in the owner's **"Cost price needed"** list (products whose pulled `costMinor` is `null`). A manager's edit keeps the existing cost. |
+| `fields.lowStockLevelUnits` | Integer ≥ 0 **in units** (half yards for yard products), or `null` to use the business's `lowStockThreshold` (Decision 2-2). Since BE7. |
+| `fields.lowStockWarnings` | `false` turns low-stock warnings off for this product (default `true`). Since BE7. |
+| `fields.isHidden` | `true` hides the product from the selling list (past sales and reports keep it); `false` shows it again. Products are never deleted. |
+
+The server sets `unitScale` itself (2 for `yard`, so 2.5 yards is 5 units; 1 for everything else).
+
+- **Result (`saved`):** `{ "productId": "d521…", "version": 2, "warnings": [] }`. Keep `version` on the local product (it's the next `baseVersion`, and what a sale names as `productVersion` from BE8). The full row also comes in the next pull.
+- **Warnings** (in `result.warnings`; the product **is saved**, show them so the person can change it):
+
+| `code` | When | Words |
+|---|---|---|
+| `WHOLESALE_ABOVE_RETAIL` | The wholesale price is higher than the retail price. | "The wholesale price is higher than the retail price." |
+| `BELOW_COST` | A selling price is below the cost price. **Owner only** (never sent to a manager). | "This price is below your cost price." |
+| `PRODUCT_NAME_DUPLICATE` | Another product of the business (hidden ones too) has the same name, ignoring capitals and spaces. `productId`: that product. | "You already have a product with this name." with **Open it** and **Change the name**. |
+
+  Duplicate names are **never rejected**: two phones may add the same product offline and each sell it before syncing. Only the one the server receives second gets the warning (the first had no twin yet); the first phone sees the other product in its next pull, so the app should also check names locally.
+- **Rejected:** `FORBIDDEN`, `INVALID_PAYLOAD` (`fields`), `VALIDATION_FAILED` (`fields`), `NOT_FOUND`, `ID_TAKEN`, `SIZES_NOT_ALLOWED` (changing a product with sizes to fabric: "Fabric has no sizes."), `UNIT_LOCKED` (since BE7: switching between `yard` and another unit once the product has any stock movement or count).
+
+#### `size.upsert`
+
+Adds a size to a product, or edits one (label, position, its own prices, remove/restore). Fabric has no sizes; a product with no sizes simply has none.
+
+- **Who:** owner and manager; **`costMinor` owner only** (as for products). **Since:** BE6.
+- **Add:**
+
+  ```json
+  { "sizeId": "6c2e…", "productId": "d521…", "baseVersion": null, "fields": { "label": "42", "sortOrder": 12, "retailMinor": 14000 } }
+  ```
+
+- **Edit:** `{ "sizeId": "6c2e…", "productId": "d521…", "baseVersion": 1, "fields": { "isActive": false } }`
+
+| Field | Rules |
+|---|---|
+| `sizeId` | UUID made on the phone. |
+| `productId` | The size's product (it must be in the business, otherwise `NOT_FOUND`; a size can't move to another product: `VALIDATION_FAILED`, `fields.productId`). |
+| `baseVersion` | `null` to add; the size's `version` edited, to edit. |
+| `fields.label` | 1–20 characters, e.g. `42`, `XL`, `3Y`. **Required to add.** |
+| `fields.sortOrder` | Integer, its position (sizes always show by `sortOrder`, never alphabetically). **Required to add.** |
+| `fields.retailMinor`, `fields.wholesaleMinor` | This size's own price, or `null` to use the product's (AC19: for example sizes 42–46 cost more). Same range as product prices. |
+| `fields.costMinor` | This size's own cost, or `null` to use the product's. **Owner only.** |
+| `fields.isActive` | `false` removes the size from sale (it's kept for history); `true` brings it back. A size whose stock isn't 0 (above or below) can't be removed: `SIZE_HAS_STOCK`, "This size still has 3 in stock." (since BE7). |
+
+A product has at most **60 sizes** (`VALIDATION_FAILED`, `fields.label`).
+
+- **Result (`saved`):** `{ "sizeId": "6c2e…", "version": 1, "warnings": [] }`. Keep `version` (the next `baseVersion`, and a sale's `sizeVersion` from BE8).
+- **Warnings:** `WHOLESALE_ABOVE_RETAIL` and `BELOW_COST` (owner only), using the prices this size really sells at (its own, else the product's); **`SIZE_LABEL_DUPLICATE`** with `sizeId`, when another active size of the product has the same label ("This product already has this size.").
+- **Rejected:** `FORBIDDEN`, `INVALID_PAYLOAD`, `VALIDATION_FAILED`, `NOT_FOUND`, `ID_TAKEN`, `SIZES_NOT_ALLOWED`, `SIZE_HAS_STOCK`.
+
+**A product with sizes, added offline:** push the `product.upsert` first, then one `size.upsert` per size, in one or more pushes (200 operations per push at most). If the product is rejected, its sizes come back `NOT_FOUND`: show them under the product in "Needs attention".
+
+#### `stock.create`
+
+Goods in or out of one size (or one product without sizes) at one shop: **opening** stock (the starting stock when a product is added: push it right after the product's `product.upsert` and `size.upsert`), a **restock** (a delivery: one operation per size with a quantity; empty boxes send nothing), or a **removal** (with a reason). A **permanent record**: never changed; a mistake is balanced by another movement.
+
+- **Who:** owner and manager (associates: `FORBIDDEN`, Decision F-17). Sales, returns and exchanges make their own movements (BE8, BE10). **Since:** BE7.
+- **Payload:**
+
+  ```json
+  {
+    "movementId": "4b0d…", "type": "removal", "locationId": "c5ba…", "productId": "d521…", "sizeId": "6c2e…",
+    "quantityUnits": 2, "reason": "damaged", "note": "Torn strap", "recordedAt": "2026-11-10T10:15:00.000Z"
+  }
+  ```
+
+| Field | Rules |
+|---|---|
+| `movementId` | UUID made on the phone when the person saves. |
+| `type` | `opening`, `restock` or `removal`. |
+| `locationId` | The shop (from the `location` pull row; one shop at launch). Unknown: `NOT_FOUND`. |
+| `productId`, `sizeId` | The product, and its size; `sizeId` is **required when the product has active sizes** (`fields.sizeId`: "Choose a size.") and `null` when it has none. A size of another product: `VALIDATION_FAILED`. No `opening` or `restock` into a removed size ("This size has been removed."); a removal is allowed. |
+| `quantityUnits` | **Positive** integer **in units** (the server stores removals as negative): from 1 to 100,000 in the product's unit, so for yard products 1 to 200,000 half yards (**2.5 yards = 5**). Fractions other than half yards: refuse on the phone with "Use whole or half yards (for example, 2.5)." |
+| `reason` | **Removals only, required:** `damaged`, `lost`, `supplier_return`, `used`, `other` (see Enums). Other types must not send it. |
+| `note` | 1–200 characters, optional; **required when the reason is `other`** ("Write what happened."). A restock's note can hold the supplier's name. |
+| `recordedAt` | When the person saved it, from the phone's clock, UTC ISO 8601 (`toISOString()`). |
+
+- **Never refused for short stock** (Decision 2-3, F-8): the phone stops a removal of more than it shows (AC7, "Only 3 in stock"), but if another phone's records made it short meanwhile, the server still saves it.
+- **Result (`saved`):** `{ "movementId": "4b0d…", "stockOnHandUnits": 3, "flags": { "belowZeroOnArrival": false, "clockSkew": false } }`.
+- **`flags`** (set once when saved, never changed; also in the pull row):
+  - `belowZeroOnArrival`: the size's stock was below zero right after this record arrived. **Current stock always comes from the stock rule**, never from this flag (later records may fix it).
+  - `clockSkew`: `recordedAt` is more than 10 minutes in the future, or the record says it was made online (`recordedOnline`) and arrived more than 10 minutes from `recordedAt`.
+- **Rejected:** `FORBIDDEN`, `INVALID_PAYLOAD`, `VALIDATION_FAILED` (`fields`: `sizeId`, `quantityUnits`, `reason`, `note`), `NOT_FOUND`, `ID_TAKEN`.
+
+#### `stockCount.create`
+
+A physical count of one size at one shop (AC10–AC12, Decision 2-5): the number **on the shelf**, plus what the phone showed when counting. The difference is **worked out, never sent**. A permanent record.
+
+- **Who:** owner and manager (associates: `FORBIDDEN`). **Since:** BE7.
+- **Payload:**
+
+  ```json
+  {
+    "countId": "9a1e…", "locationId": "c5ba…", "productId": "d521…", "sizeId": "6c2e…",
+    "countedUnits": 8, "baselineUnits": 10, "baselineCursor": 120,
+    "reason": "lost_or_stolen", "note": null, "recordedAt": "2026-11-10T10:00:00.000Z"
+  }
+  ```
+
+| Field | Rules |
+|---|---|
+| `countId` | UUID made on the phone. |
+| `locationId`, `productId`, `sizeId` | As in `stock.create` (a removed size can be counted). |
+| `countedUnits` | What is on the shelf, **in units** (half yards for yard products), 0 or more, at most 100,000 in the product's unit. |
+| `baselineUnits` | What the phone showed for this size when the count was made (may be below zero). |
+| `baselineCursor` | The phone's pull cursor at that moment. |
+| `reason` | **Only when `countedUnits` ≠ `baselineUnits`, and then required:** `damaged`, `lost_or_stolen`, `miscounted_before`, `other` (see Enums). When they match, send no reason (the count is "Checked, correct"); a reason then is refused. |
+| `note` | 1–200 characters, optional; **required when the reason is `other`**. |
+| `recordedAt` | When the count was made (phone clock, UTC ISO 8601). |
+
+- **Result (`saved`):** `{ "countId": "9a1e…", "expectedUnits": 10, "differenceUnits": -2, "stockOnHandUnits": 8 }`: the difference **as the server knows it now**. Records that arrive later can change it (that's the point); always show the difference worked out with the stock rule from the pulled rows.
+- **Rejected:** `FORBIDDEN`, `INVALID_PAYLOAD`, `VALIDATION_FAILED` (`fields`: `sizeId`, `countedUnits`, `reason`, `note`), `NOT_FOUND`, `ID_TAKEN`.
+
+---
+
+## The stock rule (server and phone)
+
+Stock is **never stored as a number** anywhere: the server and the phone both work it out from the `stockMovement` and `stockCount` rows, with **this exact rule**, for one size (or a product without sizes) at one shop. The phone keeps a `stockLevels` table updated with it (Epic 2, Story 2.4), rebuilt after each pull.
+
+1. **Order:** every row has a **stock key** `(recordedAt, id)`: earlier `recordedAt` first; at the same instant, the smaller `id`, comparing the lower-case UUIDs as plain strings, character by character. Never use `serverSeq` or arrival order.
+2. **Stock on hand:** with no count, the **sum of all movements' `quantityUnits`**. With counts, the **latest count's `countedUnits` plus the movements after it** (by stock key). Movements before the latest count are already in what was on the shelf, so a sale recorded at 09:55 that arrives after a 10:00 count changes nothing, and one at 10:05 is subtracted.
+3. **A count's difference:** `expectedUnits` = stock on hand worked out from **only the rows before the count** (rule 2 applied to them); `differenceUnits = countedUnits − expectedUnits` (+ found more, − fewer). Show it as "Counted 8, expected 7: +1". It changes when a record from before the count arrives late: that's correct.
+4. **Check this count** (`countCheck`, worked out, never stored): `true` when **any movement** recorded within **10 minutes** of the count (before or after) has a **`receivedAt` later than the count's `receivedAt`**: a late record near the count time, which a wrong phone clock could have put on the wrong side. Show "Check this count: a sale near the count time arrived late".
+5. Stock can be **below zero** (Decision F-8): show "Below zero: check the shelf". **Low** (AC19): above 0 and at or below the product's `lowStockLevelUnits` (or, when `null`, the business's `lowStockThreshold` in **whole units of the product's unit**: for yard products, compare in yards); **Out of stock** at 0. Hidden products and products with `lowStockWarnings: false` never show as low.
+6. Quantities shown to people: `quantityUnits / unitScale` with the unit ("12 pairs", "2.5 yards").
+
+**Shared test fixtures.** The server tests its rule against exactly these cases (`tests/fixtures/stock-rule.json`); the app must test its copy against them too. For each case: `stockOnHand` for all its rows, and for each listed count `expectedUnits`, `differenceUnits` and `needsCheck`. The answers must not depend on the order of the rows.
+
+<!-- stock-rule-fixtures:start -->
+```json
+{
+  "about": "Shared fixtures for the stock rule (server src/services/stockRule.js and the phone app). docs/api.md shows this exact JSON; a test keeps them identical.",
+  "cases": [
+    {
+      "name": "no count: stock is the sum of the movements",
+      "movements": [
+        { "id": "a0000000-0000-4000-8000-000000000001", "quantityUnits": 10, "recordedAt": "2026-11-10T08:00:00.000Z", "receivedAt": "2026-11-10T08:00:05.000Z" },
+        { "id": "a0000000-0000-4000-8000-000000000002", "quantityUnits": -3, "recordedAt": "2026-11-10T09:00:00.000Z", "receivedAt": "2026-11-10T09:00:05.000Z" }
+      ],
+      "counts": [],
+      "expect": { "stockOnHand": 7, "counts": [] }
+    },
+    {
+      "name": "the worked example: A shows 10, B sells 3 at 09:58 offline, A counts 8 at 10:00, B's sale arrives later",
+      "movements": [
+        { "id": "b0000000-0000-4000-8000-000000000001", "quantityUnits": 10, "recordedAt": "2026-11-10T08:00:00.000Z", "receivedAt": "2026-11-10T08:00:05.000Z" },
+        { "id": "b0000000-0000-4000-8000-000000000002", "quantityUnits": -3, "recordedAt": "2026-11-10T09:58:00.000Z", "receivedAt": "2026-11-10T11:30:00.000Z" }
+      ],
+      "counts": [
+        { "id": "b0000000-0000-4000-8000-0000000000c1", "countedUnits": 8, "recordedAt": "2026-11-10T10:00:00.000Z", "receivedAt": "2026-11-10T10:00:10.000Z" }
+      ],
+      "expect": {
+        "stockOnHand": 8,
+        "counts": [{ "id": "b0000000-0000-4000-8000-0000000000c1", "expectedUnits": 7, "differenceUnits": 1, "needsCheck": true }]
+      }
+    },
+    {
+      "name": "a movement recorded after the count is added to it; one long before it is absorbed and doesn't trigger a check",
+      "movements": [
+        { "id": "c0000000-0000-4000-8000-000000000001", "quantityUnits": 20, "recordedAt": "2026-11-10T07:00:00.000Z", "receivedAt": "2026-11-10T12:00:00.000Z" },
+        { "id": "c0000000-0000-4000-8000-000000000002", "quantityUnits": -2, "recordedAt": "2026-11-10T10:30:00.000Z", "receivedAt": "2026-11-10T10:30:05.000Z" }
+      ],
+      "counts": [
+        { "id": "c0000000-0000-4000-8000-0000000000c1", "countedUnits": 15, "recordedAt": "2026-11-10T10:00:00.000Z", "receivedAt": "2026-11-10T10:00:10.000Z" }
+      ],
+      "expect": {
+        "stockOnHand": 13,
+        "counts": [{ "id": "c0000000-0000-4000-8000-0000000000c1", "expectedUnits": 20, "differenceUnits": -5, "needsCheck": false }]
+      }
+    },
+    {
+      "name": "two counts: only the latest is the starting point; each difference uses only the rows before it",
+      "movements": [
+        { "id": "d0000000-0000-4000-8000-000000000001", "quantityUnits": 10, "recordedAt": "2026-11-10T08:00:00.000Z", "receivedAt": "2026-11-10T08:00:05.000Z" },
+        { "id": "d0000000-0000-4000-8000-000000000002", "quantityUnits": -1, "recordedAt": "2026-11-10T12:00:00.000Z", "receivedAt": "2026-11-10T12:00:05.000Z" },
+        { "id": "d0000000-0000-4000-8000-000000000003", "quantityUnits": 4, "recordedAt": "2026-11-10T16:00:00.000Z", "receivedAt": "2026-11-10T16:00:05.000Z" }
+      ],
+      "counts": [
+        { "id": "d0000000-0000-4000-8000-0000000000c1", "countedUnits": 9, "recordedAt": "2026-11-10T09:00:00.000Z", "receivedAt": "2026-11-10T09:00:10.000Z" },
+        { "id": "d0000000-0000-4000-8000-0000000000c2", "countedUnits": 6, "recordedAt": "2026-11-10T14:00:00.000Z", "receivedAt": "2026-11-10T14:00:10.000Z" }
+      ],
+      "expect": {
+        "stockOnHand": 10,
+        "counts": [
+          { "id": "d0000000-0000-4000-8000-0000000000c1", "expectedUnits": 10, "differenceUnits": -1, "needsCheck": false },
+          { "id": "d0000000-0000-4000-8000-0000000000c2", "expectedUnits": 8, "differenceUnits": -2, "needsCheck": false }
+        ]
+      }
+    },
+    {
+      "name": "same instant: the smaller id comes first (a movement with a larger id than the count counts after it)",
+      "movements": [
+        { "id": "e0000000-0000-4000-8000-000000000001", "quantityUnits": 5, "recordedAt": "2026-11-10T08:00:00.000Z", "receivedAt": "2026-11-10T08:00:05.000Z" },
+        { "id": "e0000000-0000-4000-8000-0000000000f0", "quantityUnits": -1, "recordedAt": "2026-11-10T10:00:00.000Z", "receivedAt": "2026-11-10T10:00:01.000Z" },
+        { "id": "e0000000-0000-4000-8000-000000000002", "quantityUnits": -2, "recordedAt": "2026-11-10T10:00:00.000Z", "receivedAt": "2026-11-10T10:00:01.000Z" }
+      ],
+      "counts": [
+        { "id": "e0000000-0000-4000-8000-0000000000c1", "countedUnits": 3, "recordedAt": "2026-11-10T10:00:00.000Z", "receivedAt": "2026-11-10T10:00:01.000Z" }
+      ],
+      "expect": {
+        "stockOnHand": 2,
+        "counts": [{ "id": "e0000000-0000-4000-8000-0000000000c1", "expectedUnits": 3, "differenceUnits": 0, "needsCheck": false }]
+      }
+    },
+    {
+      "name": "half yards: 2.5 yards is 5 units; selling 1.5 yards is -3",
+      "movements": [
+        { "id": "f0000000-0000-4000-8000-000000000001", "quantityUnits": 5, "recordedAt": "2026-11-10T08:00:00.000Z", "receivedAt": "2026-11-10T08:00:05.000Z" },
+        { "id": "f0000000-0000-4000-8000-000000000002", "quantityUnits": -3, "recordedAt": "2026-11-10T09:00:00.000Z", "receivedAt": "2026-11-10T09:00:05.000Z" }
+      ],
+      "counts": [],
+      "expect": { "stockOnHand": 2, "counts": [] }
+    },
+    {
+      "name": "below zero is allowed (two phones sold the last item)",
+      "movements": [
+        { "id": "a1000000-0000-4000-8000-000000000001", "quantityUnits": 1, "recordedAt": "2026-11-10T08:00:00.000Z", "receivedAt": "2026-11-10T08:00:05.000Z" },
+        { "id": "a1000000-0000-4000-8000-000000000002", "quantityUnits": -1, "recordedAt": "2026-11-10T09:00:00.000Z", "receivedAt": "2026-11-10T09:30:00.000Z" },
+        { "id": "a1000000-0000-4000-8000-000000000003", "quantityUnits": -1, "recordedAt": "2026-11-10T09:05:00.000Z", "receivedAt": "2026-11-10T09:31:00.000Z" }
+      ],
+      "counts": [],
+      "expect": { "stockOnHand": -1, "counts": [] }
+    }
+  ]
+}
+```
+<!-- stock-rule-fixtures:end -->
+
 ---
 
 ## Pull rows
@@ -863,6 +1181,10 @@ Every row type a pull can return. `data` holds only the fields listed; the serve
 | `location` | ✅ | ✅ | ✅ |
 | `membership` | ✅ | ✗ | ✗ |
 | `device` | ✅ | ✗ | ✗ |
+| `product` | ✅ with `costMinor` | ✅ **no `costMinor`** | ✅ **no `costMinor`** |
+| `size` | ✅ with `costMinor` | ✅ **no `costMinor`** | ✅ **no `costMinor`** |
+| `stockMovement` | ✅ all fields | ✅ all fields | ✅ **only** `id`, `locationId`, `productId`, `sizeId`, `quantityUnits`, `recordedAt`, `receivedAt` |
+| `stockCount` | ✅ all fields | ✅ all fields | ✅ **only** `id`, `locationId`, `productId`, `sizeId`, `countedUnits`, `recordedAt`, `receivedAt` |
 
 Managers and associates learn their own role and business from `GET /api/auth/me`; the phone's copy of a role is for display only (the server checks it on every request).
 
@@ -902,6 +1224,59 @@ Managers and associates learn their own role and business from `GET /api/auth/me
 
 `lastSeenAt` and `lastSyncAt` are updated at most every 5 minutes and **don't** by themselves put the row in a pull (call `GET /api/devices` for fresh values).
 
+**`product`** (everyone; hidden products too, so past sales still show their names):
+
+```json
+{
+  "id": "d521…", "name": "Black sandal", "type": "shoes", "unit": "pair", "unitLabel": null, "unitScale": 1,
+  "retailMinor": 12000, "wholesaleMinor": 10000, "costMinor": 8000,
+  "isHidden": false, "version": 2, "updatedBy": "407f…", "updatedAt": "2026-11-08T09:00:00.000Z"
+}
+```
+
+`costMinor` is **only in the owner's rows** (`null` when no cost was entered yet: the "Cost price needed" list). For managers and associates the field is **not there at all**, so cost prices never reach their phones (AC20). `version` is the next `baseVersion`. Search uses the name on the phone (lower case, single spaces).
+
+**`size`** (everyone):
+
+```json
+{
+  "id": "6c2e…", "productId": "d521…", "label": "42", "sortOrder": 12,
+  "retailMinor": 14000, "wholesaleMinor": null, "costMinor": null,
+  "isActive": true, "version": 1, "updatedBy": "407f…", "updatedAt": "2026-11-08T10:15:00.000Z"
+}
+```
+
+`null` prices mean "use the product's". `costMinor` as for products (owner only). Show only active sizes for selling, ordered by `sortOrder`. The price a size sells at: its own `retailMinor`/`wholesaleMinor`, else the product's (and for wholesale without any wholesale price, the retail price).
+
+Prices are kept per version on the server (`PriceVersion`); that history is **never pulled**.
+
+The `product` row also has (since BE7) `lowStockLevelUnits` (units, or `null` = the business's level) and `lowStockWarnings` (boolean).
+
+**`stockMovement`** (everyone; associates get only the stock-rule fields, see the table):
+
+```json
+{
+  "id": "4b0d…", "locationId": "c5ba…", "productId": "d521…", "sizeId": "6c2e…", "quantityUnits": -2,
+  "recordedAt": "2026-11-10T10:15:00.000Z", "receivedAt": "2026-11-10T10:15:04.000Z",
+  "type": "removal", "reason": "damaged", "note": "Torn strap",
+  "flags": { "belowZeroOnArrival": false, "clockSkew": false }, "recordedBy": "407f…"
+}
+```
+
+`quantityUnits` is **signed** here (+ in, − out). `type`, `reason`, `note`, `flags` and `recordedBy` are for the owner and managers (stock history, AC25; removals in the day summary, AC9). A movement is never changed or deleted, so a row with a known `id` never comes twice except when re-pulled from 0.
+
+**`stockCount`** (everyone; associates get only the stock-rule fields):
+
+```json
+{
+  "id": "9a1e…", "locationId": "c5ba…", "productId": "d521…", "sizeId": "6c2e…", "countedUnits": 8,
+  "recordedAt": "2026-11-10T10:00:00.000Z", "receivedAt": "2026-11-10T10:00:10.000Z",
+  "baselineUnits": 10, "reason": "lost_or_stolen", "note": null, "recordedBy": "407f…"
+}
+```
+
+Work out its difference and "check this count" with the stock rule; they are not in the row.
+
 ## Enums and flags
 
 | Enum | Values | Words to show |
@@ -911,3 +1286,11 @@ Managers and associates learn their own role and business from `GET /api/auth/me
 | `role` | `owner`, `manager`, `associate` | Owner, Manager, Sales associate |
 | business `status` | `active`, `closing` | (nothing), Closing on [date] |
 | member `status` | `active`, `invited`, `declined`, `removed` | (nothing), Waiting for them to accept, Declined, Removed |
+| product `type` | `clothing`, `shoes`, `fabric`, `other` | Clothing, Shoes, Fabric, Other |
+| product `unit` | `piece`, `pair`, `set`, `dozen`, `yard`, `custom` | piece/pieces, pair/pairs, set/sets, dozen, yard/yards ("2.5 yards"), the shop's own word (`unitLabel`) |
+| product warning | `WHOLESALE_ABOVE_RETAIL`, `BELOW_COST` (owner only), `PRODUCT_NAME_DUPLICATE`, `SIZE_LABEL_DUPLICATE` | See `product.upsert` and `size.upsert` |
+| stock movement `type` | `opening`, `restock`, `sale`, `return_in`, `exchange_in`, `exchange_out`, `removal` (BE7 sends the first, second and last; the others come with sales and corrections) | Starting stock, Added, Sold, Returned, Exchanged in, Exchanged out, Removed |
+| removal `reason` | `damaged`, `lost`, `supplier_return`, `used`, `other` | Damaged, Lost or stolen, Returned to supplier, Used or given away, Other |
+| count `reason` | `damaged`, `lost_or_stolen`, `miscounted_before`, `other` | Damaged, Lost or stolen, Miscounted before, Other |
+| movement flag | `belowZeroOnArrival`, `clockSkew` | "Stock was below zero when this arrived", "The phone's clock looked wrong" |
+| count check (worked out) | `countCheck` | "Check this count: a sale near the count time arrived late" |

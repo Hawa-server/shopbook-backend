@@ -637,3 +637,172 @@ These lines were added in FE2. Like FE1's, they are drafts by Claude Code for a 
 | `errors.field.country` | Choose a country. | Paw ɔman. |
 | `errors.field.acceptTerms` | Tick the box to accept the privacy notice and terms. | Hyɛ ahwɛ no so na gye kokoam nkra ne nhyehyɛeɛ no tom. |
 
+
+---
+
+## BE5 Part B: sync (push and pull)
+
+### Push: sending records, each one exactly once
+
+The phone keeps every change in an **outbox** and sends it with `POST /api/sync/push` as **operations**, each with its own `opId` (a UUID made on the phone). The server answers each operation separately: `saved`, `duplicate` (already saved earlier, with the same answer as the first time) or `rejected` (with a code). One bad operation never blocks the others.
+
+`runOperation` (`src/sync/runOperation.js`) handles one operation in one transaction:
+
+1. **Reserve the `opId`** in `ProcessedOperation`. If another request already has it, this one waits, and then gets the stored answer (`duplicate`) or `OP_ID_CONFLICT` if the payload, type or phone is different (a bug in the phone: two different things sent with one ID).
+2. **Lock rows in one fixed order** (customer → sale → … → `SyncSequence` last). Two transactions taking locks in the same order can't wait for each other in a circle, which is how deadlocks happen.
+3. **Run the handler** inside a savepoint: if it rejects, only its own writes are undone, and the rejection is stored.
+4. **Stamp sequence numbers** (`serverSeq`) on every row it wrote, last of all, then store the answer and commit, all together.
+
+A **temporary** failure (the database went away, a deadlock that didn't clear after 3 tries) rolls everything back, **including the reservation**, so the phone's retry is treated as new. It's never stored as a rejection: that would lose a real sale.
+
+### Pull: getting other phones' changes
+
+Every synced row has a `serverSeq`, numbered 1, 2, 3… per business. The phone asks `GET /api/sync/pull?since=<cursor>`. The server reads the **watermark** (the highest number fully committed) and scans `since+1 … min(since+limit, watermark)`. It returns only the rows **this person may see** (Who sees what), and `nextCursor` is the last number **scanned**, not the last row returned. So an associate whose page held only hidden rows (for example the owner's team list) still moves forward, instead of asking for the same page forever.
+
+---
+
+## BE5.5: the sync torture test
+
+### What it is
+
+`npm run test:sync` starts a **real server** on a random local port and several pretend **phones** (`tests/torture/harness.js`) that talk to it over real HTTP, each with its own cookie, its own signing key and its own clock. Then it does to sync everything a market day can do to it: bad networks, retries, two phones at once, a database that falls over. It runs the whole suite **three times in a row** (`scripts/repeat-tests.js`): problems with timing don't always show up the first time, so one pass isn't enough. It's part of `npm run test:all`, not the everyday `npm test`.
+
+Sales, debts and returns don't exist yet, so locations stand in for "a record". BE8, BE9 and BE10 add their own cases (receipt numbers, a late offline sale, two phones returning the same item).
+
+### Test-only operations, and why they can't reach production
+
+The test needs records it can create in bulk, and failures it can switch on. So the harness defines three operations of its own: `test.addLocation`, `test.failAt` (fails as if the database stopped) and `test.deadlockOnce` (fails as if MySQL broke a deadlock). They live **only** in the test folder and are handed to the test server by the test code. The real list of operations (`src/sync/operations`) has none of them, and the failures are switched on only by the test code itself (a plain variable), never by a header, a query or an environment variable. Two tests prove it: no file in `src/` even names them, and a server started exactly as in production answers `UNKNOWN_OPERATION` for all three, even when the request asks for them.
+
+### The cases, in plain words
+
+| Case | What happens in real life | What must happen |
+|---|---|---|
+| The same push twice, and twice at the same moment | The phone thought the first try failed and sent again | Saved once; the copies get `duplicate` |
+| The answer is lost | The shop's network drops just as the server answers; the server saved it, the phone doesn't know | The phone retries as a **new** request (new nonce, new signature) and gets `duplicate`. Someone who copies the exact old request and sends it again gets `NONCE_REUSED`: a recorded request can't be replayed |
+| Four copies at the same moment | A phone's retry runs into its own first try | Exactly one location; three `duplicate` |
+| Operation 3 of 10 is invalid | A bug, or an old app version | 9 saved, 1 rejected, and the rejected one isn't reserved, so a corrected one can use the same `opId` |
+| The database stops at operation 5 of 10 | Aiven restarts in the middle of a push | 1–4 stay saved; 5 leaves nothing at all (no half row, no `ProcessedOperation` row); the phone's retry saves 5–10, and 1–4 come back `duplicate` |
+| Same `opId`, different payload or type, or from another phone | A bug in the phone | `OP_ID_CONFLICT` for that operation only; nothing applied; the rest of the batch is still saved |
+| A deadlock | Two busy phones collide in the database | Retried automatically; one `ProcessedOperation` row, one location |
+| A phone's clock is 10 minutes slow | Phones' clocks are often wrong | First request `CLOCK_OUT_OF_RANGE`; the phone reads `X-Server-Time` from that answer and corrects itself; the retry is saved once |
+| Five phones push 50 operations at the same moment | A busy Saturday | All 50 saved; every sequence number unique (`check:sequences` agrees) |
+| Two owner phones edit the settings offline | Owner and their second phone both changed the receipt note | The last received wins; both are in the history, the later one marked `conflict` |
+| An associate's page of only hidden rows | New team members and phones the associate isn't allowed to see | The cursor still moves on, no endless asking |
+| Rows saved while a phone is paging | Another phone pushes during a long pull | They come in the next pages, exactly once, never skipped |
+| 2,000 rows, pages of 500 | A phone that was offline a long time | Each row exactly once; server memory steady (below) |
+| Role filtering | Who sees what | Owner gets settings, locations, memberships and phones; managers and associates only settings and locations |
+| A removed member, a revoked phone | Someone leaves; a phone is stolen | `ACCESS_REMOVED` and `DEVICE_REVOKED` on push and pull; the removed person still works in their **own** business |
+| Afterwards | | `check:sequences` and `check:operations` find nothing wrong |
+
+### The memory check and its margin
+
+After paging through the 2,000 rows once, the test pages through them **five more times**, forcing a garbage collection after each (that's why the tests run with `node --expose-gc`), and checks that the server's heap has grown by **less than 64 MB**.
+
+Why so generous? The test, the server and the test's phones all share one Node process, and the heap moves for reasons that have nothing to do with a leak: Jest's own bookkeeping, MySQL connection buffers, compiled code, and when exactly V8 decides to free memory. Those moves are a few megabytes and change from run to run. A leak looks different: if the server kept each page's rows, five more passes over 2,000 rows would keep growing round after round, and a real leak at real sizes grows without stopping. 64 MB is far above the normal wobble, so the test doesn't fail at random (it must pass three runs in a row), and still catches the kind of leak that matters. It isn't a performance measurement; the server's real memory is watched in production in BE14.
+
+### Running it
+
+`npm run test:sync` (needs the test database, `.env.test`). It takes a few minutes per run, mostly the password hashing at sign-up and sign-in (deliberately slow). If any run fails, the script stops and says which run.
+
+---
+
+## BE6: products, sizes and prices
+
+### Products go through sync, like everything a phone records
+
+Adding or editing a product is a **sync operation** (`product.upsert`), not an ordinary endpoint, because the owner may do it with no network. The phone makes the product's ID itself (`crypto.randomUUID()`), saves it locally, and pushes it later. "Upsert" means: a new ID adds the product, a known ID edits it. Each size is its own operation (`size.upsert`), pushed after its product. A shoe with 11 sizes is 12 operations, which is fine: a push takes up to 200.
+
+The ready-made size ranges (shoes 30–46, clothing XS–XXXL, children 1Y–12Y) are **data** in `src/catalog/sizeRanges.js`, sent in `GET /api/reference`. The phone turns "30 to 40" into 11 sizes, each with its position (`sortOrder`), so sizes show in natural order (30, 31 … 40; S, M, L) and never alphabetically. Adding a range later means adding one entry to that file.
+
+### Versions, and why every price is remembered
+
+Every accepted change makes a new `version` of the product or size, and its prices and cost at that version are written to **`PriceVersion`** in the same transaction. Nothing ever changes or deletes those rows (they're on the permanent-records list).
+
+Why? Picture this: on Monday the owner raises a sandal from GH₵ 120.00 to GH₵ 130.00. On Saturday a sales associate's phone, offline since Friday, still shows GH₵ 120.00 and sells it at that price. When the sale syncs (BE8), the server must check that GH₵ 120.00 really was the price the phone was showing, and work out the profit from the cost **at that moment**. The sale will name the version it used, and `PriceVersion` answers "what were the prices in version 1?". The new version is also in the operation's stored result, so a sale made right after an offline price edit can name that edit by its `opId`.
+
+The version is also how editing works: "last change received wins, with history". The phone says which version it edited (`baseVersion`). If someone else changed the product in between, the change is still applied (the later one wins), and the history marks it as a **conflict**, so the owner can see that two phones changed it at once.
+
+### Cost prices belong to the owner
+
+- Only the owner sends `costMinor`. A manager's operation with a cost is rejected `FORBIDDEN`; a manager's edit keeps the existing cost.
+- In the **pull**, the owner's product and size rows have `costMinor`; everyone else's rows don't have the field **at all**, so it can never be found in a staff phone's storage.
+- The **`BELOW_COST` warning** goes only to the owner: telling a manager "this price is below cost" would tell them roughly what the cost is.
+- The **history** (`GET /api/products/:productId/history`) keeps cost in the server's `ChangeLog`; for a manager the endpoint removes it, and leaves out changes that were only about cost.
+
+When the owner adds a product, the cost is required. When a manager adds one, it's saved without a cost, and the owner's phone shows it in a "Cost price needed" list (the products whose `costMinor` is `null`), until the owner adds it.
+
+### Warnings, not errors
+
+Some things are worth telling the person but must never stop a save:
+
+- the wholesale price is higher than the retail price;
+- a selling price is below the cost (owner only);
+- **another product already has this name** (`PRODUCT_NAME_DUPLICATE`), or another size of the product has this label (`SIZE_LABEL_DUPLICATE`).
+
+The duplicate-name rule was decided on 8 Nov 2026. Two phones offline may both add "Black sandal" and **both sell it** before either syncs. If the server rejected the second product, every sale on that phone that used it would land in "Needs attention", which is exactly the kind of mess the app exists to prevent. So both are saved, and the one that arrives second gets the warning with the other's ID; the owner can then hide one. The comparison ignores capitals and extra spaces ("  black   SANDAL" is the same as "Black sandal").
+
+### Units and the yard
+
+Quantities are whole numbers everywhere. Fabric sold by the yard can be sold in half yards, so for yards the server sets `unitScale` to 2 and quantities count **half yards**: 2.5 yards is stored as 5. Every other unit has `unitScale` 1. The phone never sends `unitScale`; the server works it out from the unit. Fabric is sold by the piece or the yard only, and has no sizes.
+
+### The database helps too
+
+- Prices must be above zero, `unitScale` must match the unit, fabric can't have another unit, and a shop's own unit must have a name: all `CHECK` constraints in MySQL, so even a bug can't save a broken product.
+- `PriceVersion` can't hold the same version twice for one product or size. MySQL can't have a NULL column in a primary key, and a product's own prices have no size, so the table has an ordinary `id` and a unique key on `(businessId, productId, sizeKey, version)`, where `sizeKey` is a column MySQL fills in itself: the size's ID, or empty for the product.
+- Sizes and price rows point at their product with **composite foreign keys** `(businessId, productId)`, so they can't point at another business's product.
+- `ChangeLog` gained `seq`, a number MySQL counts up for every row, so history always shows in the order changes were saved (two changes can happen in the same millisecond).
+
+### What waits for BE7
+
+Starting stock (the first stock entry when a product is added), refusing to remove a size that still has stock, and refusing to switch a product between yards and other units once it has stock all need stock, which arrives in BE7. They're written into BE7's "Done when".
+
+### A lesson about migrations (8 Nov 2026)
+
+While building BE6, the products migration was changed after it had already run on the **test** database (`ChangeLog.seq` was added to it). The test database still had the old version, so the migration had to be undone there first. But undoing ran the **new** `down()`, which tried to remove `seq`, something the old version never created. It failed halfway: the three product tables were dropped, yet the migration was still marked as done in `SequelizeMeta`. From then on `db:migrate` would have skipped it, and the tables would simply have been missing. It was fixed on the test database by removing that mark (after checking the database's name ended in `_test`), and then migrating again. Development and production were never affected.
+
+The lesson is that a migration file is a **record of something that already happened** to a database. `SequelizeMeta` remembers only the file's *name*, not what was in it. If the file changes afterwards, the database and the file quietly disagree, and on the next undo or on a fresh database the two give different results. That's why the project now has this rule (in CLAUDE.md):
+
+- Once a migration has run on **production**, it is never edited. Any change, however small, is a **new** migration.
+- **Before** production, a migration may be edited only after undoing it on **every local database** (development and test), while its `down()` still matches what its `up()` did. Then it's applied again from the new file.
+
+The rule was used straight away. BE6's migration gave `ChangeLog` its `seq` column, but MySQL numbered the rows that **already existed** in the order of their primary key, a random UUID, so older history (team, phones, settings) got its numbers in random order. That migration had already run on production, so it wasn't edited: a **new** migration (`20261111100000-changelog-seq-order`) renumbers every row by `(changedAt, seq)`. Older rows fall into time order; newer rows, whose `seq` was already right, keep it as the tie-breaker for two changes in the same millisecond. Its `down()` does nothing, because a random order isn't worth restoring.
+
+---
+
+## BE7: stock
+
+### Stock is a list of things that happened
+
+The server never keeps a "stock = 7" number that gets changed. Instead it keeps **what happened**: goods arrived (`opening`, `restock`), goods left (`removal`; from BE8 `sale`), and people counted the shelf (`StockCount`). Each is a **permanent record**: saved once, never changed or deleted. A mistake is balanced by another movement or a new count. Stock is worked out from those records every time it's needed.
+
+Why? Because phones are offline. Two phones can each sell the last pair of sandals; a delivery recorded on Monday can reach the server on Wednesday. If the server kept one number and changed it, the order in which phones happened to sync would decide the answer, and some changes could be lost. A list of events gives the same answer whatever order they arrive in.
+
+### The stock rule
+
+1. Put every movement and count of one size in order of **when it happened** (`recordedAt`, and the ID for a tie), never in order of arrival.
+2. **No count yet:** stock is the sum of the movements.
+3. **With counts:** stock is the **latest count** plus the movements after it. Movements before a count are already "inside" what was on the shelf.
+
+The worked example: phone A shows 10. Phone B, offline, sells 3 at 09:58. At 10:00 phone A counts 8. B's sale arrives at 11:30. Stock is **8** (the count, since the sale happened before it), and the count's difference is 8 − (10 − 3) = **+1**: one more than expected, not 2 missing. When the count was first saved the server could only say −2; once B's sale arrived, the difference corrected itself. That's why a count stores **what was on the shelf**, never a difference.
+
+**Check this count:** if a sale recorded within 10 minutes of a count reaches the server *after* the count, a wrong phone clock could have put it on the wrong side, so the count shows "Check this count". This is **worked out** from the arrival times, never stored, because a count is a permanent record that late records mustn't change.
+
+The rule lives in one small file, `src/services/stockRule.js`, with no database in it, so the phone app can copy it exactly. Both sides test their copy against the same examples (`tests/fixtures/stock-rule.json`, also printed in `api.md`; a test checks the two copies are identical). The server's database side (`src/services/stock.js`) loads only the latest count and the movements after it, so a size with years of history stays fast.
+
+### Never refused for short stock
+
+If a removal (or, from BE8, a sale) takes stock below zero, it's **saved anyway** (Decision F-8): the goods really left the stall, and refusing would make the records wrong. The movement gets the flag `belowZeroOnArrival`, set once when it's saved, and the owner and manager see "Below zero: check the shelf". The flag is a note about that moment; the current stock always comes from the rule, so a later restock or count fixes it. When two phones remove the last items at the same moment, the product row is **locked** for the first one, so the second sees the first's movement and is the one flagged.
+
+`clockSkew` marks a record whose phone clock looked wrong: more than 10 minutes in the future, or "made online" but arriving more than 10 minutes from its time.
+
+### Who can do what
+
+Only the owner and managers add, remove or count stock (Decision F-17); an associate's attempt is refused. Everyone receives the stock rows, because everyone needs to answer "Do you have size 42?". Associates get only the fields the rule needs (quantities and times), not who removed what, the reasons or the notes.
+
+### Units
+
+Quantities are whole numbers. Products sold by the yard count **half yards**, so 2.5 yards is 5 units, and the limit of 100,000 yards is 200,000 units. A size whose stock isn't 0 can't be removed ("This size still has 3 in stock."), and once a product has any stock record it can't switch between yards and another unit, because every stored quantity would suddenly mean something else.
+
+### check:stock
+
+`npm run check:stock` (read-only) works out every size's stock two independent ways, the rule over **all** its rows and one plain SQL query, and reports any size where they disagree. Since stock is never stored, this is how we know the rule, the server's shortcut (latest count plus later movements) and the data all agree.

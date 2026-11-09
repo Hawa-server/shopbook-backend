@@ -239,6 +239,55 @@ describe('pull', () => {
     expect(hiddenOnly.body.nextCursor).toBeGreaterThan(watermarkBefore);
   });
 
+  test('product and size rows (BE6): everyone gets them, but only the owner\'s carry costMinor; managers and associates have no cost field', async () => {
+    const o = await owner();
+    const m = await staff(o, 'manager');
+    const a = await staff(o, 'associate');
+    const productId = randomUUID();
+    await push(o, [
+      { opId: randomUUID(), type: 'product.upsert', recordedOnline: true, payload: { productId, baseVersion: null, fields: { name: 'Kente', type: 'fabric', unit: 'yard', retailMinor: 5000, costMinor: 4321 } } },
+      { opId: randomUUID(), type: 'product.upsert', recordedOnline: true, payload: { productId: randomUUID(), baseVersion: null, fields: { name: 'Shirt', type: 'clothing', unit: 'piece', retailMinor: 9000, costMinor: 4322 } } },
+    ]);
+    const shirt = (await db.getModels().Product.findOne({ where: { businessId: o.businessId, name: 'Shirt' } })).id;
+    await push(o, [{ opId: randomUUID(), type: 'size.upsert', recordedOnline: true, payload: { sizeId: randomUUID(), productId: shirt, baseVersion: null, fields: { label: 'M', sortOrder: 0, costMinor: 4323 } } }]);
+
+    const typed = async (who) => (await pull(who)).body.rows.filter((r) => r.type === 'product' || r.type === 'size');
+    const ownerRows = await typed(o);
+    expect(ownerRows.map((r) => [r.type, r.data.costMinor])).toEqual([['product', 4321], ['product', 4322], ['size', 4323]]);
+    for (const who of [m, a]) {
+      const rows = await typed(who);
+      expect(rows.map((r) => r.type)).toEqual(['product', 'product', 'size']);
+      for (const r of rows) expect(r.data).not.toHaveProperty('costMinor');
+      const values = rows.flatMap((r) => Object.values(r.data));
+      for (const cost of [4321, 4322, 4323]) expect(values).not.toContain(cost);
+    }
+  });
+
+  test("an owner's business with settings, location, membership and device rows pulls with 200 on every page, from limit=1 up", async () => {
+    // Regression (8 Nov 2026): every page that scanned rows answered 500 while
+    // the code pulled a table the database didn't have yet (BE6 code before its migration).
+    const o = await owner();
+    await staff(o, 'manager'); // a second membership and device
+    const full = await pull(o);
+    expect(full.status).toBe(200);
+    expect(new Set(full.body.rows.map((r) => r.type))).toEqual(new Set(['settings', 'location', 'membership', 'device']));
+
+    for (const limit of [1, 2, 3, 500]) {
+      const seen = [];
+      let cursor = 0;
+      for (let guard = 0; guard < 100; guard += 1) {
+        const page = await pull(o, cursor, limit);
+        expect(page.status).toBe(200);
+        seen.push(...page.body.rows.map((r) => `${r.type}:${r.serverSeq}`));
+        cursor = page.body.nextCursor;
+        if (!page.body.hasMore) break;
+      }
+      expect(seen).toEqual(full.body.rows.map((r) => `${r.type}:${r.serverSeq}`));
+    }
+    const beyond = await pull(o, full.body.watermark + 5);
+    expect([beyond.status, beyond.body.rows]).toEqual([200, []]);
+  });
+
   test('paging with a small limit returns every row exactly once', async () => {
     const o = await owner();
     for (let i = 0; i < 3; i += 1) await staff(o, 'associate');
