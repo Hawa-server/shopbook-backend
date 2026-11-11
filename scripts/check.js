@@ -1,5 +1,6 @@
 // Runs read-only consistency checks against the database in the loaded env
-// file: `npm run check:sequences`, `npm run check:operations`, `npm run check:stock` (development,
+// file: `npm run check:sequences`, `npm run check:operations`, `npm run check:stock`,
+// `npm run check:receipts`, `npm run check:balances` (development,
 // .env). Prints each problem found (IDs only, never personal data) and exits 1
 // if there is any, 0 if everything is consistent. It changes nothing.
 // Production: run by the project owner only, with their .env.production.
@@ -8,8 +9,11 @@ const { getSequelize, closeDatabase } = require('../src/db');
 const { getConfigOrExit } = require('../src/config/env');
 const { checkSequences, checkOperations } = require('../src/checks/syncChecks');
 const { checkStock } = require('../src/checks/stockChecks');
+const { checkReceipts, checkBalances } = require('../src/checks/moneyChecks');
 
-const CHECKS = { sequences: checkSequences, operations: checkOperations, stock: checkStock };
+const CHECKS = {
+  sequences: checkSequences, operations: checkOperations, stock: checkStock, receipts: checkReceipts, balances: checkBalances,
+};
 
 // Runs the named check and reports.
 async function main(name) {

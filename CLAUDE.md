@@ -129,4 +129,4 @@ Fill these in during BE1:
 - Start the server: `npm run dev` (local, reads `.env`, reloads on change); `npm start` on Render
 - Run the tests: `npm test` (everyday: `check:api-docs`, then the unit and API tests with `.env.test`, aiming for under 3 minutes); `npm run test:all` (everything, **required for every task's Done when**: `npm test`, then `test:isolation`, then `test:sync`; stops at the first failure); `npm run test:isolation`; `npm run test:sync` (sync torture test, three runs in a row)
 - Run migrations (local): `npm run db:migrate` (development, `.env`); `npm run db:migrate:test` (test, `.env.test`); `db:migrate:status`, `db:migrate:undo`
-- Run the consistency checks (local): `npm run check:sequences`, `npm run check:operations`, `npm run check:stock` (read-only, development database `.env`); the others (`check:balances`, `check:receipts`) arrive with their tasks
+- Run the consistency checks (local): `npm run check:sequences`, `npm run check:operations`, `npm run check:stock`, `npm run check:receipts`, `npm run check:balances` (read-only, development database `.env`)

@@ -305,7 +305,7 @@ These three are **locked once money has been recorded** (`Business.moneyRecorded
 
 ### Payment methods per business
 
-Each business lists the methods it uses (`paymentMethods`: cash and mobile money in Ghana). From BE8 a payment in any other method is refused (`PAYMENT_METHOD_NOT_ENABLED`). The sale rules don't change: what was paid is the sum of the payments, whatever their method. Day closes (BE12) check **each method separately**: the drawer for cash, the MoMo balance for mobile money.
+Each business lists the methods it uses (`paymentMethods`: cash and mobile money in Ghana). From BE8 a payment code that doesn't exist at all is refused (`PAYMENT_METHOD_UNKNOWN`), but a real method the owner has switched off since is **saved and flagged** `methodDisabled` (decided 9 Nov 2026): the money was really taken. The sale rules don't change: what was paid is the sum of the payments, whatever their method. Day closes (BE12) check **each method separately**: the drawer for cash, the MoMo balance for mobile money.
 
 ### The migration
 
@@ -806,3 +806,54 @@ Quantities are whole numbers. Products sold by the yard count **half yards**, so
 ### check:stock
 
 `npm run check:stock` (read-only) works out every size's stock two independent ways, the rule over **all** its rows and one plain SQL query, and reports any size where they disagree. Since stock is never stored, this is how we know the rule, the server's shortcut (latest count plus later movements) and the data all agree.
+
+---
+
+## BE8: sales
+
+### One sale, one transaction
+
+`sale.create` saves a sale with everything that belongs to it: its lines (`SaleItem`), its payments (`SalePayment`), one stock movement per line, its receipt number in the registry, and the customer's new balance. All of it happens in **one transaction** inside `runOperation`, so a sale is never half saved: if anything fails, nothing of it exists, and the phone's retry starts clean. Like stock movements, a sale is a **permanent record**: no code can change or delete it. A mistake is fixed with a correction (BE10), and the original stays visible.
+
+### The server recalculates, the phone's numbers are only checked
+
+The phone shows the seller every number before they confirm, and sends them all. The server works them all out again itself and compares:
+
+- **The set price** comes from the **version** of the product (and size) the phone was showing. Every price change made a numbered version in BE6 (`PriceVersion`), so even a sale made offline on Saturday, at Monday's old price, is checked against the price the phone really showed. If the phone edited the price itself and sold before syncing, the line names that edit by its `opId` instead of a number.
+- **The line total** is quantity × agreed price, divided by `unitScale` for yards. Half a yard at GH₵ 15.05 is 752.5 pesewas, which isn't a whole number. The rule (decided 9 Nov 2026) is to round to the nearest pesewa, halves up: 753. The phone shows the rounded total before confirming, and the sale is saved with the `roundedLine` flag so the owner can see it. The phone and the server must round exactly the same way, so the rule lives in one small file (`src/services/saleRule.js`), with examples in `tests/fixtures/sale-rule.json` that both sides test against (printed in `api.md`).
+- **Subtotal, paid and credit** must add up exactly: credit = subtotal − paid, never below zero, and any credit needs a customer.
+- **The cost** is never sent by the phone. The server takes it from the same version, so profit is right even if the cost changed later. Only the owner ever sees it.
+
+If the numbers don't match, the sale is rejected (`SALE_TOTALS_MISMATCH`, `PRICE_VERSION_MISMATCH`): that only happens through a bug or tampering, because the phone uses the same rule.
+
+### Saved and flagged, never refused
+
+Some things look wrong but really happened in the shop, and refusing the sale would lose a real sale. These are **saved** with a flag for the owner (and manager) to review:
+
+| Flag | What happened |
+|---|---|
+| `belowZeroOnArrival` | Two phones sold the last pair; stock went below zero |
+| `overCreditLimit` | The customer now owes more than their limit (the phone stops associates; the owner and manager may go ahead, Decision 3-3) |
+| `belowCost` | Sold below cost (owner only: telling anyone else would reveal the cost) |
+| `olderPrice` | The phone used a price that had already changed (Decision 3-8) |
+| `roundedLine` | A half-yard total was rounded |
+| `methodDisabled` | Paid with a method the owner had just switched off (an unknown method code is still refused) |
+| `clockSkew` | The phone's clock looked wrong |
+
+### Receipt numbers
+
+Receipt numbers are made **on the phone** (`K7M-0042`: the phone's code, then its own counter), so a sale has its number the moment it's confirmed, even offline. The server never makes one; it checks it. The number must start with **this phone's** code, and the `ReceiptNumber` registry makes sure it's used only once in the business, across sales, corrections and repayments. `check:receipts` (read-only) confirms every registry row has its record and every sale its registry row.
+
+### Customers and balances
+
+A credit sale needs a customer, and the seller may add one in the middle of a sale (`customer.upsert`, add only for now; editing comes with BE9). The customer's `balanceMinor` is a **cache** the server updates in the sale's own transaction, so an associate, who only receives their own sales, still sees every customer's correct balance. It's never the truth on its own: `check:balances` works every balance out again from the sales and reports any difference. In BE9 balances become proper debt lots (oldest debt paid first, credit, returns).
+
+### Who sees what
+
+- **Associates receive only their own sales** (they can't see other people's customers' purchases), but every stock movement's quantities, so their stock is right. Their pull cursor still moves past the sales they don't receive.
+- **Cost (`unitCostMinor`) and the "sold below cost" flag** go only to the owner. Managers see the other flags; associates see only "below zero" and the clock flag.
+- A sale's lines and payments travel **inside** the sale's own pull row, so a page can never contain half a sale.
+
+### The first sale locks the currency
+
+The business's first money record sets `moneyRecordedAt`. From then on its country, currency and time zone can't change (`localeLocked`), because every stored amount and business day would suddenly mean something else.

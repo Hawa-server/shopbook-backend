@@ -27,10 +27,10 @@ The API for Shop Book, an offline-first bookkeeping app for market traders: Expr
 | `npm run db:migrate:test` | Migrations on the test database (`.env.test`) |
 | `npm run test:isolation` | The business isolation tests on their own |
 | `npm run test:sync` | The sync torture test (`tests/torture`), three runs in a row; stops at the first failing run |
-| `npm run check:sequences` / `check:operations` / `check:stock` | Read-only consistency checks of sync on the development database; print any problem (IDs only) and exit 1, change nothing |
+| `npm run check:sequences` / `check:operations` / `check:stock` / `check:receipts` / `check:balances` | Read-only consistency checks of sync on the development database; print any problem (IDs only) and exit 1, change nothing |
 | `npm run dev:sign -- …` | Signs test requests with a throwaway test key (development only; see `docs/guide.md`) |
 
-`check:sequences` and `check:operations` exist since BE5, `check:stock` since BE7; `check:balances` and `check:receipts` arrive with their tasks. On production they're run only by the project owner: `node --env-file=.env.production scripts/check.js sequences` (read-only).
+`check:sequences` and `check:operations` exist since BE5, `check:stock` since BE7, `check:receipts` and `check:balances` since BE8 (`check:balances` becomes the full debt-lot rebuild in BE9). On production they're run only by the project owner: `node --env-file=.env.production scripts/check.js sequences` (read-only).
 
 ## Deployment
 

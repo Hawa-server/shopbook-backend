@@ -1,0 +1,21 @@
+{
+  "about": "Shared fixtures for the sale rule (server src/services/saleRule.js and the phone app). docs/api.md shows this exact JSON; a test keeps them identical.",
+  "lineTotal": [
+    { "name": "whole units: 3 × GH₵ 10.00", "quantityUnits": 3, "agreedPriceMinor": 1000, "unitScale": 1, "expect": { "lineTotalMinor": 3000, "rounded": false } },
+    { "name": "2.5 yards at GH₵ 12.00 a yard (5 half yards)", "quantityUnits": 5, "agreedPriceMinor": 1200, "unitScale": 2, "expect": { "lineTotalMinor": 3000, "rounded": false } },
+    { "name": "half a yard at GH₵ 15.05: 752.5 rounds up to 753", "quantityUnits": 1, "agreedPriceMinor": 1505, "unitScale": 2, "expect": { "lineTotalMinor": 753, "rounded": true } },
+    { "name": "1.5 yards at GH₵ 15.01: 2251.5 rounds up to 2252", "quantityUnits": 3, "agreedPriceMinor": 1501, "unitScale": 2, "expect": { "lineTotalMinor": 2252, "rounded": true } },
+    { "name": "half a yard at GH₵ 15.04: exactly 752, no rounding", "quantityUnits": 1, "agreedPriceMinor": 1504, "unitScale": 2, "expect": { "lineTotalMinor": 752, "rounded": false } },
+    { "name": "half a yard at 1 pesewa: 0.5 rounds up to 1", "quantityUnits": 1, "agreedPriceMinor": 1, "unitScale": 2, "expect": { "lineTotalMinor": 1, "rounded": true } },
+    { "name": "a free item (agreed price 0)", "quantityUnits": 2, "agreedPriceMinor": 0, "unitScale": 1, "expect": { "lineTotalMinor": 0, "rounded": false } },
+    { "name": "the largest line: 100,000 yards at GH₵ 1,000,000.00", "quantityUnits": 200000, "agreedPriceMinor": 100000000, "unitScale": 2, "expect": { "lineTotalMinor": 10000000000000, "rounded": false } }
+  ],
+  "setPrice": [
+    { "name": "retail, no size", "priceType": "retail", "product": { "retailMinor": 12000, "wholesaleMinor": 10000 }, "size": null, "expect": 12000 },
+    { "name": "retail, the size's own price", "priceType": "retail", "product": { "retailMinor": 12000, "wholesaleMinor": 10000 }, "size": { "retailMinor": 14000, "wholesaleMinor": null }, "expect": 14000 },
+    { "name": "wholesale, the size has none: the product's wholesale", "priceType": "wholesale", "product": { "retailMinor": 12000, "wholesaleMinor": 10000 }, "size": { "retailMinor": 14000, "wholesaleMinor": null }, "expect": 10000 },
+    { "name": "wholesale, the size's own wholesale", "priceType": "wholesale", "product": { "retailMinor": 12000, "wholesaleMinor": 10000 }, "size": { "retailMinor": 14000, "wholesaleMinor": 11500 }, "expect": 11500 },
+    { "name": "wholesale with no wholesale price anywhere: the retail price (the size's own)", "priceType": "wholesale", "product": { "retailMinor": 12000, "wholesaleMinor": null }, "size": { "retailMinor": 14000, "wholesaleMinor": null }, "expect": 14000 },
+    { "name": "wholesale with no wholesale price, no size: the product's retail", "priceType": "wholesale", "product": { "retailMinor": 12000, "wholesaleMinor": null }, "size": null, "expect": 12000 }
+  ]
+}
