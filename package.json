@@ -16,6 +16,8 @@
     "check:sequences": "node --env-file=.env scripts/check.js sequences",
     "check:operations": "node --env-file=.env scripts/check.js operations",
     "check:stock": "node --env-file=.env scripts/check.js stock",
+    "check:receipts": "node --env-file=.env scripts/check.js receipts",
+    "check:balances": "node --env-file=.env scripts/check.js balances",
     "dev:sign": "node scripts/dev-sign.js",
     "test:isolation": "node --env-file-if-exists=.env.test node_modules/jest/bin/jest.js --runInBand tests/isolation",
     "test:sync": "node scripts/repeat-tests.js 3 tests/torture",

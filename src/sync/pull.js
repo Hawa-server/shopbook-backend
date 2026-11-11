@@ -10,8 +10,9 @@
 //   page whose rows are all hidden from this person still moves the cursor on
 //   and the phone never gets stuck asking again.
 // - Rows are filtered BY ROLE on the server ("Who sees what"): settings,
-//   locations, products, sizes and stock rows go to everyone (associates get
-//   only the stock fields the stock rule needs); memberships and devices
+//   locations, products, sizes, stock rows and customers go to everyone
+//   (associates get only the stock fields the stock rule needs); sales go to
+//   the owner and managers, and to an associate only when they made them; memberships and devices
 //   only to the owner. FIELDS are filtered too: a product's or size's
 //   costMinor is in the owner's rows only; for everyone else the field is
 //   left out entirely (not sent as null), so it never reaches their phone.
@@ -20,6 +21,7 @@ const { Op } = require('sequelize');
 const { SYNCED_MODELS } = require('../models');
 const { scoped } = require('../services/scoped');
 const { readWatermark } = require('./runOperation');
+const { saleView } = require('../services/saleView');
 
 const MAX_LIMIT = 500;
 
@@ -33,7 +35,12 @@ const VISIBLE_TO = {
   size: ['owner', 'manager', 'associate'],
   stockMovement: ['owner', 'manager', 'associate'],
   stockCount: ['owner', 'manager', 'associate'],
+  customer: ['owner', 'manager', 'associate'],
+  sale: ['owner', 'manager', 'associate'], // associates: their OWN sales only (ONLY_OWN below)
 };
+
+// Row types an associate receives only when they recorded them.
+const ONLY_OWN = { sale: 'recordedBy' };
 
 // BIGINT money columns can come back as strings: always send numbers (or null).
 const num = (v) => (v === null || v === undefined ? null : Number(v));
@@ -83,7 +90,7 @@ const VIEWS = {
     id: r.id, locationId: r.locationId, productId: r.productId, sizeId: r.sizeId ?? null,
     quantityUnits: r.quantityUnits, recordedAt: r.recordedAt, receivedAt: r.receivedAt,
     ...(role === 'associate' ? {} : {
-      type: r.type, reason: r.reason ?? null, note: r.note ?? null, flags: r.flags, recordedBy: r.recordedBy,
+      type: r.type, reason: r.reason ?? null, note: r.note ?? null, flags: r.flags, recordedBy: r.recordedBy, saleId: r.saleId ?? null,
     }),
   }),
   stockCount: (r, role) => ({
@@ -93,7 +100,23 @@ const VIEWS = {
       baselineUnits: r.baselineUnits, reason: r.reason ?? null, note: r.note ?? null, recordedBy: r.recordedBy,
     }),
   }),
+  // Customers (BE8): everyone, to sell on credit and collect (Who sees what).
+  customer: (r) => ({
+    id: r.id, name: r.name, phone: r.phone ?? null, language: r.language, isHidden: r.isHidden,
+    creditLimitMinor: num(r.creditLimitMinor), balanceMinor: num(r.balanceMinor), oldestUnpaidAt: r.oldestUnpaidAt ?? null,
+    version: r.version, updatedAt: r.updatedAt,
+  }),
+  // A sale with its lines and payments inside (one row, never split across
+  // pages); cost and some flags by role (src/services/saleView.js).
+  sale: (r, role) => saleView(r, role),
 };
+
+// Extra reading options per model (the sale's lines and payments come with it).
+function includeFor(models, modelName) {
+  if (modelName === 'Membership' || modelName === 'Device') return [{ model: models.User, as: 'user' }];
+  if (modelName === 'Sale') return [{ model: models.SaleItem, as: 'items' }, { model: models.SalePayment, as: 'payments' }];
+  return [];
+}
 
 // Reads one page for the person in `req` (business, membership from requireAuth).
 async function pullPage(deps, req, { since, limit }) {
@@ -107,8 +130,9 @@ async function pullPage(deps, req, { since, limit }) {
   if (upper > since) {
     for (const [modelName, type] of Object.entries(SYNCED_MODELS)) {
       if (!VISIBLE_TO[type].includes(role)) continue;
-      const include = modelName === 'Membership' || modelName === 'Device' ? [{ model: models.User, as: 'user' }] : [];
-      const found = await s[modelName].findAll({ where: { serverSeq: { [Op.gt]: since, [Op.lte]: upper } }, include });
+      const where = { serverSeq: { [Op.gt]: since, [Op.lte]: upper } };
+      if (role === 'associate' && ONLY_OWN[type]) where[ONLY_OWN[type]] = req.user.id;
+      const found = await s[modelName].findAll({ where, include: includeFor(models, modelName) });
       for (const r of found) rows.push({ type, serverSeq: Number(r.serverSeq), data: VIEWS[type](r, role) });
     }
   }

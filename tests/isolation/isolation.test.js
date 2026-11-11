@@ -51,6 +51,19 @@ async function buildBusiness(label) {
     deviceId: ownerDevice.deviceId,
     operations: [{ opId: randomUUID(), type: 'stock.create', payload: { movementId, type: 'opening', locationId, productId, sizeId, quantityUnits: 5, recordedAt: new Date().toISOString() } }],
   });
+  const customerId = randomUUID();
+  const saleId = randomUUID();
+  await agent.post('/api/sync/push').set(biz(businessId)).send({
+    deviceId: ownerDevice.deviceId,
+    operations: [
+      { opId: randomUUID(), type: 'customer.upsert', payload: { customerId, baseVersion: null, fields: { name: `Customer ${label}` } } },
+      { opId: randomUUID(), type: 'sale.create', payload: {
+        saleId, receiptNumber: `${ownerDevice.deviceCode}-0001`, locationId, customerId, priceType: 'retail',
+        items: [{ itemId: randomUUID(), productId, sizeId, quantityUnits: 1, productVersion: 1, sizeVersion: 1, setPriceMinor: 12000, agreedPriceMinor: 12000, lineTotalMinor: 12000 }],
+        payments: [], subtotalMinor: 12000, paidMinor: 0, creditMinor: 12000, recordedAt: new Date().toISOString(),
+      } },
+    ],
+  });
 
   return {
     label, agent, businessId, ownerId: res.body.user.id, ownerPhone: body.phone, ownerPassword: body.password,
@@ -58,7 +71,7 @@ async function buildBusiness(label) {
     invitedId: invited.body.member.membershipId, invitee,
     removedId: removed.body.member.membershipId,
     memberIds: [staff.body.member.membershipId, invited.body.member.membershipId, removed.body.member.membershipId],
-    deviceId: ownerDevice.deviceId, deviceCode: ownerDevice.deviceCode, productId, sizeId, locationId, movementId,
+    deviceId: ownerDevice.deviceId, deviceCode: ownerDevice.deviceCode, productId, sizeId, locationId, movementId, customerId, saleId,
   };
 }
 
@@ -135,6 +148,27 @@ const CASES = {
     expect(await StockMovement.count({ where: { businessId: B.businessId } })).toBe(bMovements);
     expect(await StockCount.count({ where: { businessId: B.businessId } })).toBe(0);
     expect((await StockMovement.findByPk(B.movementId)).businessId).toBe(B.businessId);
+
+    // Sales naming B's product, customer or shop: answered like unknown ones; B's customer balance untouched.
+    const { Customer, Sale } = db.getModels();
+    const bBalance = (await Customer.findByPk(B.customerId)).balanceMinor;
+    const aSale = (fields, itemFields = {}) => ({ opId: randomUUID(), type: 'sale.create', payload: {
+      saleId: randomUUID(), receiptNumber: `${A.deviceCode}-${String(Math.floor(Math.random() * 1e6)).padStart(6, '0')}`, locationId: A.locationId, customerId: null, priceType: 'retail',
+      items: [{ itemId: randomUUID(), productId: A.productId, sizeId: A.sizeId, quantityUnits: 1, productVersion: 1, sizeVersion: 1, setPriceMinor: 12000, agreedPriceMinor: 12000, lineTotalMinor: 12000, ...itemFields }],
+      payments: [], subtotalMinor: 12000, paidMinor: 0, creditMinor: 12000, recordedAt: now, ...fields,
+    } });
+    const saleTries = await A.agent.post('/api/sync/push').set(biz(A.businessId)).send({
+      deviceId: A.deviceId,
+      operations: [
+        aSale({ customerId: B.customerId }),
+        aSale({ customerId: null, paidMinor: 12000, creditMinor: 0, payments: [{ paymentId: randomUUID(), method: 'cash', amountMinor: 12000 }] }, { productId: B.productId, sizeId: B.sizeId }),
+        aSale({ customerId: null, paidMinor: 12000, creditMinor: 0, locationId: B.locationId, payments: [{ paymentId: randomUUID(), method: 'cash', amountMinor: 12000 }] }),
+        aSale({ customerId: null, paidMinor: 12000, creditMinor: 0, saleId: B.saleId, payments: [{ paymentId: randomUUID(), method: 'cash', amountMinor: 12000 }] }),
+      ],
+    });
+    expect(saleTries.body.results.map((r) => r.error.code)).toEqual(['NOT_FOUND', 'NOT_FOUND', 'NOT_FOUND', 'ID_TAKEN']);
+    expect((await Customer.findByPk(B.customerId)).balanceMinor).toBe(bBalance);
+    expect(await Sale.count({ where: { businessId: B.businessId } })).toBe(1);
   },
   'GET /api/products/:productId/history': async () => {
     await expectSameAsUnknown('GET', (id) => `/api/products/${id}/history`, undefined, B.productId);
@@ -146,7 +180,7 @@ const CASES = {
     const res = await A.agent.get('/api/sync/pull?since=0').set(biz(A.businessId));
     expect(res.status).toBe(200);
     const text = JSON.stringify(res.body);
-    for (const leak of [B.businessId, B.ownerId, B.deviceId, B.productId, B.sizeId, B.locationId, B.movementId, 'Shop B', 'Owner B', 'Staff B', 'Sandal B', ...B.memberIds]) expect(text).not.toContain(leak);
+    for (const leak of [B.businessId, B.ownerId, B.deviceId, B.productId, B.sizeId, B.locationId, B.movementId, B.customerId, B.saleId, 'Customer B', 'Shop B', 'Owner B', 'Staff B', 'Sandal B', ...B.memberIds]) expect(text).not.toContain(leak);
   },
   'POST /api/devices/challenge': async () => {
     const before = await db.getModels().DeviceChallenge.count({ where: { businessId: B.businessId } });

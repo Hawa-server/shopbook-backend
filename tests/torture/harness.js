@@ -26,6 +26,7 @@ const { subtle } = webcrypto;
 const faults = {
   failRemaining: 0, // test.failAt: how many more runs fail temporarily
   deadlocksRemaining: 0, // test.deadlockOnce: how many more runs hit a deadlock
+  saleDeadlocksRemaining: 0, // test.saleDeadlockOnce: the same, for a real sale
 };
 
 // The test-only operations (all roles may send them).
@@ -56,6 +57,22 @@ const testOperations = {
       }
       ctx.stamp('Location', { id });
       return { id };
+    },
+  },
+  // The REAL sale.create (same schema, same handler), but MySQL "ends it to
+  // break a deadlock" after the whole sale was written, while
+  // faults.saleDeadlocksRemaining > 0. runTransaction retries it; the sale
+  // must exist exactly once (one registry row, one set of movements).
+  'test.saleDeadlockOnce': {
+    roles: ['owner', 'manager', 'associate'],
+    get schema() { return realOperations['sale.create'].schema; },
+    async handler(ctx, payload) {
+      const result = await realOperations['sale.create'].handler(ctx, payload);
+      if (faults.saleDeadlocksRemaining > 0) {
+        faults.saleDeadlocksRemaining -= 1;
+        throw Object.assign(new Error('Deadlock found (simulated)'), { original: { errno: 1213, code: 'ER_LOCK_DEADLOCK' } });
+      }
+      return result;
     },
   },
   // Like test.addLocation, but MySQL "ends it to break a deadlock" while
@@ -204,7 +221,7 @@ class Phone {
       body: { deviceId, name: 'Torture phone', publicKey: { kty: jwk.kty, crv: jwk.crv, x: jwk.x, y: jwk.y }, challenge: challenge.body.challenge, challengeSignature: signature, currentPassword: this.password },
     });
     if (res.status !== 201) throw new Error(`register failed: ${res.status} ${JSON.stringify(res.body)}`);
-    this.devices.set(business, { deviceId, privateKey: pair.privateKey });
+    this.devices.set(business, { deviceId, privateKey: pair.privateKey, deviceCode: res.body.device.deviceCode });
     return deviceId;
   }
 

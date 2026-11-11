@@ -1355,6 +1355,119 @@
           ]
         }
       ]
+    },
+    {
+      "name": "BE8 Sales (signed; run BE6 and BE7 first; replace <CODE> with your device code)",
+      "item": [
+        {
+          "name": "customer.upsert: add Ama — sign with: npm run dev:sign -- headers --method POST --path /api/sync/push --business <id> --body '<the exact JSON below>'",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/sync/push",
+            "header": [
+              {
+                "key": "X-Requested-With",
+                "value": "XMLHttpRequest"
+              },
+              {
+                "key": "X-Business",
+                "value": "{{businessId}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"deviceId\":\"<your test device id>\",\"operations\":[{\"opId\":\"2b3c4d5e-1111-4f60-8a9b-000000000001\",\"type\":\"customer.upsert\",\"recordedOnline\":true,\"payload\":{\"customerId\":\"7c1d0000-1111-4a2b-8c3d-000000000001\",\"baseVersion\":null,\"fields\":{\"name\":\"Ama Owusu\",\"phone\":\"024 555 1234\"}}}]}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('saved', () => pm.expect(pm.response.json().results[0].status).to.be.oneOf(['saved','duplicate']));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "sale.create: 2 pairs, cash 15,000 + MoMo 5,000, the rest (4,000) on credit to Ama, one price bargained — sign with: npm run dev:sign -- headers --method POST --path /api/sync/push --business <id> --body '<the exact JSON below>'",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/sync/push",
+            "header": [
+              {
+                "key": "X-Requested-With",
+                "value": "XMLHttpRequest"
+              },
+              {
+                "key": "X-Business",
+                "value": "{{businessId}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"deviceId\":\"<your test device id>\",\"operations\":[{\"opId\":\"2b3c4d5e-2222-4f60-8a9b-000000000002\",\"type\":\"sale.create\",\"recordedOnline\":true,\"payload\":{\"saleId\":\"3c4d5e6f-2222-4a70-8b9c-000000000002\",\"receiptNumber\":\"<CODE>-0001\",\"locationId\":\"<your shop's locationId from the pull>\",\"customerId\":\"7c1d0000-1111-4a2b-8c3d-000000000001\",\"priceType\":\"retail\",\"items\":[{\"itemId\":\"4d5e6f70-2222-4b80-8c9d-000000000002\",\"productId\":\"d52137d3-810d-4235-a7b7-c66b25412e04\",\"sizeId\":\"6c2e1f00-1a2b-4c3d-8e4f-5a6b7c8d9e0f\",\"quantityUnits\":2,\"productVersion\":1,\"sizeVersion\":1,\"setPriceMinor\":12000,\"agreedPriceMinor\":12000,\"lineTotalMinor\":24000}],\"payments\":[{\"paymentId\":\"5e6f7081-2222-4c90-8dae-000000000002\",\"method\":\"cash\",\"amountMinor\":15000},{\"paymentId\":\"5e6f7081-2222-4c90-8dae-000000000003\",\"method\":\"mobile_money\",\"amountMinor\":5000}],\"subtotalMinor\":24000,\"paidMinor\":20000,\"creditMinor\":4000,\"recordedAt\":\"2026-11-12T09:15:00.000Z\"}}]}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('saved with credit 4000', () => { const r = pm.response.json().results[0]; pm.expect(r.status).to.be.oneOf(['saved','duplicate']); pm.expect(r.result.creditMinor).to.eql(4000); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "sale.create: totals that don't add up → SALE_TOTALS_MISMATCH — sign with: npm run dev:sign -- headers --method POST --path /api/sync/push --business <id> --body '<the exact JSON below>'",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/sync/push",
+            "header": [
+              {
+                "key": "X-Requested-With",
+                "value": "XMLHttpRequest"
+              },
+              {
+                "key": "X-Business",
+                "value": "{{businessId}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"deviceId\":\"<your test device id>\",\"operations\":[{\"opId\":\"2b3c4d5e-3333-4f60-8a9b-000000000003\",\"type\":\"sale.create\",\"recordedOnline\":true,\"payload\":{\"saleId\":\"3c4d5e6f-3333-4a70-8b9c-000000000003\",\"receiptNumber\":\"<CODE>-0002\",\"locationId\":\"<your shop's locationId from the pull>\",\"customerId\":null,\"priceType\":\"retail\",\"items\":[{\"itemId\":\"4d5e6f70-3333-4b80-8c9d-000000000003\",\"productId\":\"d52137d3-810d-4235-a7b7-c66b25412e04\",\"sizeId\":\"6c2e1f00-1a2b-4c3d-8e4f-5a6b7c8d9e0f\",\"quantityUnits\":1,\"productVersion\":1,\"sizeVersion\":1,\"setPriceMinor\":12000,\"agreedPriceMinor\":12000,\"lineTotalMinor\":12000}],\"payments\":[{\"paymentId\":\"5e6f7081-3333-4c90-8dae-000000000004\",\"method\":\"cash\",\"amountMinor\":12001}],\"subtotalMinor\":12001,\"paidMinor\":12001,\"creditMinor\":0,\"recordedAt\":\"2026-11-12T09:20:00.000Z\"}}]}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('SALE_TOTALS_MISMATCH', () => pm.expect(pm.response.json().results[0].error.code).to.eql('SALE_TOTALS_MISMATCH'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
     }
   ]
 }

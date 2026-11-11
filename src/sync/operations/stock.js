@@ -144,6 +144,7 @@ async function countHandler(ctx, p) {
 }
 
 module.exports = {
+  insertNew, clockSkew, // shared with sale.create (BE8)
   stockCreate: { roles: ['owner', 'manager'], schema: movementSchema, handler: movementHandler },
   stockCountCreate: { roles: ['owner', 'manager'], schema: countSchema, handler: countHandler },
 };

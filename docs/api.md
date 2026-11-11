@@ -8,6 +8,7 @@ The contract between the Shop Book server and the phone app. **The app uses only
 
 Newest first.
 
+- **BE8 (Sales):** sync operations **`sale.create`** (every role) and **`customer.upsert`** (create only for now; every role), pull row types **`sale`** (with its lines and payments inside; **associates receive only their own sales**; `unitCostMinor` and the `belowCost` flag owner only) and **`customer`** (everyone), **the sale rule** (line totals rounded to the nearest minor unit, halves up; set price from the version used) with shared test fixtures, sale flags (`belowZeroOnArrival`, `clockSkew`, `overCreditLimit`, `afterDayClose`, `belowCost`, `olderPrice`, `roundedLine`, `methodDisabled`), `saleId` in the owner's and managers' `stockMovement` rows. The first sale sets `localeLocked`. New push rejection codes: `SALE_TOTALS_MISMATCH`, `PRICE_VERSION_MISMATCH`, `UNKNOWN_PRICE_VERSION`, `RECEIPT_NUMBER_TAKEN`, `RECEIPT_NUMBER_INVALID`, `PAYMENT_METHOD_UNKNOWN`. New enums: `priceType`, sale flags.
 - **BE7 (Stock):** sync operations **`stock.create`** (opening, restock, removal) and **`stockCount.create`** (owner and manager; associates `FORBIDDEN`), pull row types **`stockMovement`** and **`stockCount`** (everyone; associates get only the fields the stock rule needs), **the stock rule** (stock on hand, a count's difference, "check this count") with shared test fixtures, movement `flags` (`belowZeroOnArrival`, `clockSkew`), product fields `lowStockLevelUnits` and `lowStockWarnings`. New push rejection codes: `SIZE_HAS_STOCK` (removing a size that still has stock), `UNIT_LOCKED` (switching between yards and other units once there's stock). New enums: stock movement `type`, removal `reason`, count `reason`.
 - **BE6 (Products, sizes and prices):** sync operations **`product.upsert`** and **`size.upsert`** (owner and manager; cost prices owner only), pull row types **`product`** and **`size`** (everyone; **`costMinor` only in the owner's rows**, absent for everyone else), push results with **`warnings`** (`WHOLESALE_ABOVE_RETAIL`, `BELOW_COST` for the owner only, `PRODUCT_NAME_DUPLICATE`, `SIZE_LABEL_DUPLICATE`: never errors), new endpoint **`GET /api/products/:productId/history`** (owner and manager), and **`sizeRanges`** in `GET /api/reference`. New push rejection codes: `NOT_FOUND`, `ID_TAKEN`, `SIZES_NOT_ALLOWED`. New enums: product `type`, `unit`.
 - **BE5.5 (Sync torture test):** no change to any endpoint, operation or row type. The server's sync is now tested under repeats, lost answers, failures halfway through a batch, deadlocks, wrong phone clocks and five phones at once. What the app must do is unchanged: keep each operation's `opId` until it gets `saved`, `duplicate` or `rejected`; on a lost answer or a 5xx, send the same operations again as a **new signed request** (new nonce); on `CLOCK_OUT_OF_RANGE`, correct the clock from `X-Server-Time` and retry.
@@ -185,6 +186,12 @@ Decide what to do from **`code`** (stable), never from `message` (wording may ch
 | `SIZE_HAS_STOCK` | (push result) | A size that still has stock (above or below zero) can't be removed. `message` and `fields.isActive`: "This size still has 3 in stock." | Show the message; offer to remove the stock or count it first. |
 | `UNIT_LOCKED` | (push result) | A product with stock records can't switch between yards and another unit (stored quantities would change meaning). | Show the message; the person can add a new product instead. |
 | `SIZES_NOT_ALLOWED` | (push result) | A size for a fabric product, or a product with sizes changed to fabric. | "Needs attention" with "Fabric has no sizes." |
+| `SALE_TOTALS_MISMATCH` | (push result) | A sale's line total, subtotal, paid or credit isn't what the sale rule gives (`fields` names it and the expected value). Nothing saved. | "Needs attention": app bug (the app must use the sale rule exactly). |
+| `PRICE_VERSION_MISMATCH` | (push result) | A line's `setPriceMinor` isn't the set price of the version it names (`fields.items.N.setPriceMinor`). | "Needs attention": app bug. |
+| `UNKNOWN_PRICE_VERSION` | (push result) | A line names a product or size version the server never issued, or an `editOpId` it never accepted for that product or size. | "Needs attention". If the edit it names was rejected, fix that first. |
+| `RECEIPT_NUMBER_TAKEN` | (push result) | This receipt number is already used in the business (by a sale, correction or repayment). | "Needs attention": app bug in the receipt counter. Show "This receipt number was already used." |
+| `RECEIPT_NUMBER_INVALID` | (push result) | The receipt number doesn't start with this phone's `deviceCode` for this business. | "Needs attention": app bug (each business on the phone has its own code and counter). |
+| `PAYMENT_METHOD_UNKNOWN` | (push result) | A payment method code that doesn't exist at all. (A known method the business has switched off is **saved and flagged** `methodDisabled`, never rejected.) | "Needs attention": app bug. |
 | `OP_ID_CONFLICT` | (push result) | This `opId` was already used for a different operation (other device, type or payload). Nothing applied. | "Needs attention" marked "App problem: tell the developer"; include it in the Help message. |
 | `INTERNAL_ERROR` | 500 | Something unexpected went wrong on the server. `message` is "Something went wrong. Reference: \<request id\>". | **Temporary:** keep any unsent records and retry later. Keep the reference (also in `X-Request-Id`) for the Help message. |
 
@@ -841,7 +848,7 @@ Sends the outbox: at most **200** operations, **oldest first**. Each is processe
 | `duplicate` | Already applied earlier (a retry whose first answer was lost). `result` is the same as the first time. | Exactly as for `saved`. Nothing was applied twice. |
 | `rejected` | Refused, **permanently**: sending it again will always give the same answer. `error.code` says why (and `error.fields` for a payload problem). | Move it to **"Needs attention"** with the message; never drop it silently. `OP_ID_CONFLICT`: mark "App problem: tell the developer" (it means this phone sent two different things with one ID, a bug). |
 
-Rejection codes in results: `INVALID_PAYLOAD` (the operation or its payload is malformed; `fields` says where, as a path inside the payload, e.g. `fields.name`; nothing was stored, so a **corrected** operation may reuse the `opId`), `UNKNOWN_OPERATION` (no such type), `OP_ID_CONFLICT`, `FORBIDDEN` (this person's role can't do it), `VALIDATION_FAILED` (a business rule, with `fields`), `NOT_FOUND`, `ID_TAKEN`, `SIZES_NOT_ALLOWED`, `SIZE_HAS_STOCK`, `UNIT_LOCKED`. Each type lists its own.
+Rejection codes in results: `INVALID_PAYLOAD` (the operation or its payload is malformed; `fields` says where, as a path inside the payload, e.g. `fields.name`; nothing was stored, so a **corrected** operation may reuse the `opId`), `UNKNOWN_OPERATION` (no such type), `OP_ID_CONFLICT`, `FORBIDDEN` (this person's role can't do it), `VALIDATION_FAILED` (a business rule, with `fields`), `NOT_FOUND`, `ID_TAKEN`, `SIZES_NOT_ALLOWED`, `SIZE_HAS_STOCK`, `UNIT_LOCKED`, `SALE_TOTALS_MISMATCH`, `PRICE_VERSION_MISMATCH`, `UNKNOWN_PRICE_VERSION`, `RECEIPT_NUMBER_TAKEN`, `RECEIPT_NUMBER_INVALID`, `PAYMENT_METHOD_UNKNOWN`. Each type lists its own.
 
 - **Errors (the whole request):** `400 VALIDATION_FAILED` (`deviceId`, too many operations), `429 RATE_LIMITED`, plus the business-endpoint errors. **Any 5xx, a timeout or a network error is temporary**: keep every operation in the outbox and push again later (operations already saved come back as `duplicate`). A 5xx is never a rejection.
 - **Rate limit:** 120 sync requests (push and pull together) per 15 minutes per person. **Available since:** BE5.
@@ -1054,6 +1061,122 @@ A physical count of one size at one shop (AC10–AC12, Decision 2-5): the number
 - **Result (`saved`):** `{ "countId": "9a1e…", "expectedUnits": 10, "differenceUnits": -2, "stockOnHandUnits": 8 }`: the difference **as the server knows it now**. Records that arrive later can change it (that's the point); always show the difference worked out with the stock rule from the pulled rows.
 - **Rejected:** `FORBIDDEN`, `INVALID_PAYLOAD`, `VALIDATION_FAILED` (`fields`: `sizeId`, `countedUnits`, `reason`, `note`), `NOT_FOUND`, `ID_TAKEN`.
 
+#### `customer.upsert`
+
+Adds a customer (AC15: added quickly during a sale, with a name and an optional phone number, without leaving the sale). **Since BE8 only adding** (`baseVersion: null`); editing a customer and setting credit limits arrive with BE9.
+
+- **Who:** every role. **Since:** BE8.
+- **Payload:**
+
+  ```json
+  { "customerId": "7c1d…", "baseVersion": null, "fields": { "name": "Ama Owusu", "phone": "024 555 1234", "language": "tw" } }
+  ```
+
+| Field | Rules |
+|---|---|
+| `customerId` | UUID made on the phone. A sale can name it straight after, in the same push. |
+| `baseVersion` | Must be `null` (any number: `INVALID_PAYLOAD` until BE9). |
+| `fields.name` | 1–60 characters (trimmed, double spaces removed). |
+| `fields.phone` | Optional; a mobile number read with the business's country, stored E.164 (`VALIDATION_FAILED`, `fields.phone`: "Enter a valid mobile number, for example 024 123 4567."). |
+| `fields.language` | Optional language tag for the customer's receipts and messages; default the business's `defaultLanguage`. |
+
+The business's `defaultCreditLimitMinor` (settings) is copied in as the customer's credit limit; the balance starts at 0. Neither is ever sent by the phone.
+
+- **Result (`saved`):** `{ "customerId": "7c1d…", "version": 1 }`.
+- **Rejected:** `INVALID_PAYLOAD`, `VALIDATION_FAILED`, `ID_TAKEN`.
+
+#### `sale.create`
+
+One confirmed sale (AC18–AC19): its lines, payments and the customer if any. Saved **in one piece** with its stock movements (one per line) and the receipt number. A **permanent record**: nobody can ever change or delete it; mistakes are fixed by corrections (BE10).
+
+- **Who:** every role (an associate's sales come back to them only). **Since:** BE8.
+- **Payload:**
+
+  ```json
+  {
+    "saleId": "2f6a…", "receiptNumber": "K7M-0042", "locationId": "c5ba…", "customerId": "7c1d…", "priceType": "retail",
+    "items": [
+      { "itemId": "91b0…", "productId": "d521…", "sizeId": "6c2e…", "quantityUnits": 2, "productVersion": 3, "sizeVersion": 1,
+        "setPriceMinor": 12000, "agreedPriceMinor": 11000, "lineTotalMinor": 22000, "priceNote": "Bargained" },
+      { "itemId": "a3c4…", "productId": "e7f8…", "sizeId": null, "quantityUnits": 5, "productEditOpId": "0e5f…",
+        "setPriceMinor": 1505, "agreedPriceMinor": 1505, "lineTotalMinor": 3763 }
+    ],
+    "payments": [ { "paymentId": "b6d2…", "method": "cash", "amountMinor": 20000 }, { "paymentId": "c8e9…", "method": "mobile_money", "amountMinor": 5000 } ],
+    "subtotalMinor": 25763, "paidMinor": 25000, "creditMinor": 763,
+    "recordedAt": "2026-11-12T09:15:00.000Z"
+  }
+  ```
+
+| Field | Rules |
+|---|---|
+| `saleId` | UUID made on the phone when the sale is confirmed. |
+| `receiptNumber` | `<this phone's deviceCode>-<counter>`, e.g. `K7M-0042`: made on the phone, one counter per business on the phone, never reused. Another phone's code: `RECEIPT_NUMBER_INVALID`; a number already used: `RECEIPT_NUMBER_TAKEN`. |
+| `locationId` | The shop. |
+| `customerId` | A customer of the business, or `null`. **Required when any part is on credit** (`fields.customerId`: "Choose a customer for the part on credit."). |
+| `priceType` | `retail` or `wholesale`, for the whole sale (Decision 3-5). |
+| `items` | 1–100 lines. |
+| `items[].itemId` | UUID made on the phone. It is also the **ID of the sale's stock movement** for this line, so the phone's own copy of that movement matches the one it pulls. Returns (BE10) point at it. |
+| `items[].productId`, `sizeId` | The product and its size (`null` without sizes). A hidden product or removed size is **still saved** (the goods have gone): the phone stops new sales of them (AC5). |
+| `items[].quantityUnits` | Integer **units**, 1 to 100,000 in the product's unit (yard products: half yards, so 2.5 yards = 5). |
+| `items[].productVersion` **or** `productEditOpId` | Exactly one: the product's `version` the phone was showing, or, when the phone edited the product itself and hasn't had the answer yet, that edit's `opId` (the edit must come earlier in the outbox). |
+| `items[].sizeVersion` **or** `sizeEditOpId` | The same for the size; neither when `sizeId` is `null`. |
+| `items[].setPriceMinor` | The set price of that version, by the **sale rule** (below). Anything else: `PRICE_VERSION_MISMATCH`. |
+| `items[].agreedPriceMinor` | The price the customer agreed, per unit of the product's unit (per yard for yards), 0 or more (any price, Decision 3-1). |
+| `items[].lineTotalMinor` | By the **sale rule**: `quantityUnits × agreedPriceMinor ÷ unitScale`, **rounded to the nearest minor unit, halves up**. |
+| `items[].priceNote` | 1–200 characters; **required when the agreed price differs from the set price** (AC9: a quick note such as "Bargained", or typed). |
+| `payments` | 0–10, **one per method** (cash and MoMo split = two). `method`: a payment-method code; the business's `paymentMethods` are the ones to offer. `amountMinor` ≥ 1. A code that doesn't exist: `PAYMENT_METHOD_UNKNOWN`; a real method the business has since switched off: saved and flagged `methodDisabled`. |
+| `subtotalMinor` | The sum of the line totals. |
+| `paidMinor` | The sum of the payments; never more than the subtotal. |
+| `creditMinor` | `subtotalMinor − paidMinor` (0 or more). |
+| `recordedAt` | When the sale was confirmed (phone clock, UTC ISO 8601). |
+
+- **The server recalculates everything** from the versions and the sale rule; the phone's figures must match exactly, otherwise `SALE_TOTALS_MISMATCH` (`fields` names the field and the expected value). The **cost** is set by the server from the same version; never send one.
+- **Never refused for what happened in the shop:** stock below zero, over the customer's credit limit (even an associate's sale: the **phone** stops associates, AC16), below cost, an older price, a rounded half yard, a switched-off payment method. The sale is **saved and flagged** (see Enums, "sale flag").
+- **What the sale changes:** stock (one `sale` movement per line, ID = `itemId`), the customer's `balanceMinor` (+ the credit part) and `oldestUnpaidAt`, and on the business's first money record `localeLocked` becomes `true`.
+- **Result (`saved`):** `{ "saleId": "2f6a…", "receiptNumber": "K7M-0042", "subtotalMinor": 25763, "paidMinor": 25000, "creditMinor": 763, "flags": { … } }`; `flags` only those this person may see.
+- **Rejected:** `INVALID_PAYLOAD`, `VALIDATION_FAILED` (`fields`: `items.N.priceNote`, `items.N.quantityUnits`, `customerId`, `payments.N.method`), `NOT_FOUND` (product, size, customer or shop not in this business), `SALE_TOTALS_MISMATCH`, `PRICE_VERSION_MISMATCH`, `UNKNOWN_PRICE_VERSION`, `RECEIPT_NUMBER_TAKEN`, `RECEIPT_NUMBER_INVALID`, `PAYMENT_METHOD_UNKNOWN`, `ID_TAKEN`. Each is permanent: "Needs attention".
+
+---
+
+## The sale rule (server and phone)
+
+The phone works out every number on the confirmation screen with **this exact rule**, and the server checks it the same way. All integers.
+
+1. **Set price** of a line, from the prices of the **versions it names** (the `product` and `size` rows the phone had):
+   - retail: the size's own `retailMinor`, else the product's;
+   - wholesale: the size's own `wholesaleMinor`, else the product's `wholesaleMinor`, else the retail price from the line above.
+2. **Line total** = `quantityUnits × agreedPriceMinor ÷ unitScale`, **rounded to the nearest minor unit, halves up**. In integers: `floor((2 × quantityUnits × agreedPriceMinor + unitScale) / (2 × unitScale))`. Show the rounded total **before** confirming (half a yard at GH₵ 15.05 shows "GH₵ 7.53"). A rounded line is saved with the `roundedLine` flag (decided 9 Nov 2026), never rejected.
+3. **Subtotal** = Σ line totals; **paid** = Σ payments; **credit** = subtotal − paid (never below 0).
+4. A line's agreed price **≠** its set price needs a `priceNote`.
+
+**Shared test fixtures.** The server tests its rule against exactly these cases (`tests/fixtures/sale-rule.json`); the app must test its copy against them too.
+
+<!-- sale-rule-fixtures:start -->
+```json
+{
+  "about": "Shared fixtures for the sale rule (server src/services/saleRule.js and the phone app). docs/api.md shows this exact JSON; a test keeps them identical.",
+  "lineTotal": [
+    { "name": "whole units: 3 × GH₵ 10.00", "quantityUnits": 3, "agreedPriceMinor": 1000, "unitScale": 1, "expect": { "lineTotalMinor": 3000, "rounded": false } },
+    { "name": "2.5 yards at GH₵ 12.00 a yard (5 half yards)", "quantityUnits": 5, "agreedPriceMinor": 1200, "unitScale": 2, "expect": { "lineTotalMinor": 3000, "rounded": false } },
+    { "name": "half a yard at GH₵ 15.05: 752.5 rounds up to 753", "quantityUnits": 1, "agreedPriceMinor": 1505, "unitScale": 2, "expect": { "lineTotalMinor": 753, "rounded": true } },
+    { "name": "1.5 yards at GH₵ 15.01: 2251.5 rounds up to 2252", "quantityUnits": 3, "agreedPriceMinor": 1501, "unitScale": 2, "expect": { "lineTotalMinor": 2252, "rounded": true } },
+    { "name": "half a yard at GH₵ 15.04: exactly 752, no rounding", "quantityUnits": 1, "agreedPriceMinor": 1504, "unitScale": 2, "expect": { "lineTotalMinor": 752, "rounded": false } },
+    { "name": "half a yard at 1 pesewa: 0.5 rounds up to 1", "quantityUnits": 1, "agreedPriceMinor": 1, "unitScale": 2, "expect": { "lineTotalMinor": 1, "rounded": true } },
+    { "name": "a free item (agreed price 0)", "quantityUnits": 2, "agreedPriceMinor": 0, "unitScale": 1, "expect": { "lineTotalMinor": 0, "rounded": false } },
+    { "name": "the largest line: 100,000 yards at GH₵ 1,000,000.00", "quantityUnits": 200000, "agreedPriceMinor": 100000000, "unitScale": 2, "expect": { "lineTotalMinor": 10000000000000, "rounded": false } }
+  ],
+  "setPrice": [
+    { "name": "retail, no size", "priceType": "retail", "product": { "retailMinor": 12000, "wholesaleMinor": 10000 }, "size": null, "expect": 12000 },
+    { "name": "retail, the size's own price", "priceType": "retail", "product": { "retailMinor": 12000, "wholesaleMinor": 10000 }, "size": { "retailMinor": 14000, "wholesaleMinor": null }, "expect": 14000 },
+    { "name": "wholesale, the size has none: the product's wholesale", "priceType": "wholesale", "product": { "retailMinor": 12000, "wholesaleMinor": 10000 }, "size": { "retailMinor": 14000, "wholesaleMinor": null }, "expect": 10000 },
+    { "name": "wholesale, the size's own wholesale", "priceType": "wholesale", "product": { "retailMinor": 12000, "wholesaleMinor": 10000 }, "size": { "retailMinor": 14000, "wholesaleMinor": 11500 }, "expect": 11500 },
+    { "name": "wholesale with no wholesale price anywhere: the retail price (the size's own)", "priceType": "wholesale", "product": { "retailMinor": 12000, "wholesaleMinor": null }, "size": { "retailMinor": 14000, "wholesaleMinor": null }, "expect": 14000 },
+    { "name": "wholesale with no wholesale price, no size: the product's retail", "priceType": "wholesale", "product": { "retailMinor": 12000, "wholesaleMinor": null }, "size": null, "expect": 12000 }
+  ]
+}
+```
+<!-- sale-rule-fixtures:end -->
+
 ---
 
 ## The stock rule (server and phone)
@@ -1185,6 +1308,8 @@ Every row type a pull can return. `data` holds only the fields listed; the serve
 | `size` | ✅ with `costMinor` | ✅ **no `costMinor`** | ✅ **no `costMinor`** |
 | `stockMovement` | ✅ all fields | ✅ all fields | ✅ **only** `id`, `locationId`, `productId`, `sizeId`, `quantityUnits`, `recordedAt`, `receivedAt` |
 | `stockCount` | ✅ all fields | ✅ all fields | ✅ **only** `id`, `locationId`, `productId`, `sizeId`, `countedUnits`, `recordedAt`, `receivedAt` |
+| `customer` | ✅ | ✅ | ✅ (balance and limit, to sell and collect) |
+| `sale` | ✅ all, with `unitCostMinor` and every flag | ✅ all, **no cost**, no `belowCost` | ✅ **their own sales only**, no cost, only `belowZeroOnArrival` and `clockSkew` |
 
 Managers and associates learn their own role and business from `GET /api/auth/me`; the phone's copy of a role is for display only (the server checks it on every request).
 
@@ -1277,6 +1402,41 @@ The `product` row also has (since BE7) `lowStockLevelUnits` (units, or `null` = 
 
 Work out its difference and "check this count" with the stock rule; they are not in the row.
 
+The owner's and managers' `stockMovement` rows also have `saleId` (since BE8): the sale a `sale` movement belongs to, `null` otherwise. A sale's movement has the sale line's `itemId` as its `id`.
+
+**`customer`** (everyone):
+
+```json
+{
+  "id": "7c1d…", "name": "Ama Owusu", "phone": "+233245551234", "language": "tw", "isHidden": false,
+  "creditLimitMinor": 50000, "balanceMinor": 763, "oldestUnpaidAt": "2026-11-12T09:15:00.000Z", "version": 1, "updatedAt": "…"
+}
+```
+
+`balanceMinor` (what the customer owes; below zero = in credit, from BE9) and `oldestUnpaidAt` are **worked out by the server**; the row comes again whenever they change. Show "Updating…" next to a balance while the phone has unsent sales for that customer (AC19). `creditLimitMinor` `null` = no limit. **Associates** use the balance and limit to warn and stop over-limit credit (AC16) but get no "Who owes" list (Decision 4-6).
+
+**`sale`** (owner and managers: all; an associate: **only their own**; lines and payments inside):
+
+```json
+{
+  "id": "2f6a…", "receiptNumber": "K7M-0042", "locationId": "c5ba…", "deviceId": "3f1c…", "customerId": "7c1d…", "priceType": "retail",
+  "subtotalMinor": 25763, "paidMinor": 25000, "creditMinor": 763,
+  "flags": { "belowZeroOnArrival": false, "clockSkew": false, "olderPrice": true, "roundedLine": true },
+  "recordedBy": "407f…", "recordedAt": "2026-11-12T09:15:00.000Z", "receivedAt": "2026-11-12T09:15:04.000Z",
+  "items": [
+    { "id": "91b0…", "productId": "d521…", "sizeId": "6c2e…", "productName": "Black sandal", "sizeLabel": "42",
+      "unit": "pair", "unitLabel": null, "unitScale": 1, "quantityUnits": 2, "productVersion": 3, "sizeVersion": 1,
+      "setPriceMinor": 12000, "agreedPriceMinor": 11000, "lineTotalMinor": 22000, "priceNote": "Bargained", "unitCostMinor": 8000 }
+  ],
+  "payments": [ { "id": "b6d2…", "method": "cash", "amountMinor": 20000 }, { "id": "c8e9…", "method": "mobile_money", "amountMinor": 5000 } ]
+}
+```
+
+- `productName`, `sizeLabel`, `unit`, `unitLabel` and `unitScale` are **copies made when the sale was saved**: show these on the receipt and in sale details, never the product's current name.
+- `unitCostMinor` is **only in the owner's rows** (for profit; `null` = no cost price yet, profit "incomplete"). The field isn't there for anyone else.
+- `flags`: only the flags this person may see (Enums, "sale flag"); a flag the person may not see is **left out**, not `false`.
+- A sale never changes, so its row never comes twice except when re-pulled from 0.
+
 ## Enums and flags
 
 | Enum | Values | Words to show |
@@ -1294,3 +1454,5 @@ Work out its difference and "check this count" with the stock rule; they are not
 | count `reason` | `damaged`, `lost_or_stolen`, `miscounted_before`, `other` | Damaged, Lost or stolen, Miscounted before, Other |
 | movement flag | `belowZeroOnArrival`, `clockSkew` | "Stock was below zero when this arrived", "The phone's clock looked wrong" |
 | count check (worked out) | `countCheck` | "Check this count: a sale near the count time arrived late" |
+| `priceType` | `retail`, `wholesale` | Retail, Wholesale |
+| sale flag (who sees it) | `belowZeroOnArrival` (everyone who sees the sale), `clockSkew` (same), `overCreditLimit` (owner, manager), `afterDayClose` (owner, manager; always `false` until BE11), `belowCost` (**owner only**), `olderPrice` (owner, manager), `roundedLine` (owner, manager), `methodDisabled` (owner, manager) | "Stock was below zero when this arrived", "The phone's clock looked wrong", "Over credit limit", "Arrived after the day was closed", "Sold below cost", "Older price used", "A half-yard price was rounded", "Paid with a method that was switched off" |

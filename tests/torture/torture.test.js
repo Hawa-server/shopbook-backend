@@ -13,6 +13,7 @@ const db = require('../../src/db');
 const { operations: realOperations } = require('../../src/sync/operations');
 const { checkSequences, checkOperations } = require('../../src/checks/syncChecks');
 const { checkStock } = require('../../src/checks/stockChecks');
+const { checkReceipts, checkBalances } = require('../../src/checks/moneyChecks');
 const { resetDatabase, signupBody } = require('../helpers/dbApp');
 const { TERMS_VERSION } = require('../../src/legal');
 const { startServer, Phone, op, faults } = require('./harness');
@@ -60,7 +61,7 @@ describe('test-only operations exist only in the test harness', () => {
     const files = [];
     const walk = (dir) => fs.readdirSync(dir, { withFileTypes: true }).forEach((e) => (e.isDirectory() ? walk(path.join(dir, e.name)) : files.push(path.join(dir, e.name))));
     walk(path.join(__dirname, '../../src'));
-    const named = files.filter((f) => /test\.(addLocation|failAt|deadlockOnce)/.test(fs.readFileSync(f, 'utf8')));
+    const named = files.filter((f) => /test\.(addLocation|failAt|deadlockOnce|saleDeadlockOnce)/.test(fs.readFileSync(f, 'utf8')));
     expect(named).toEqual([]);
   });
 
@@ -274,6 +275,100 @@ describe('many phones at once', () => {
   });
 });
 
+describe('sales (BE8)', () => {
+  let locationId;
+  let counter = 0;
+  // A product with `stock` pairs, made by the owner.
+  async function sandal(stock) {
+    locationId ??= (await models().Location.findOne({ where: { businessId: business } })).id;
+    const productId = randomUUID();
+    await owner.push(business, [
+      op('product.upsert', { productId, baseVersion: null, fields: { name: `Torture sandal ${productId.slice(0, 6)}`, type: 'other', unit: 'pair', retailMinor: 5000, costMinor: 3000 } }),
+      ...(stock ? [op('stock.create', { movementId: randomUUID(), type: 'opening', locationId, productId, sizeId: null, quantityUnits: stock, recordedAt: new Date(Date.now() - 3600000).toISOString() })] : []),
+    ]);
+    return productId;
+  }
+  // A one-line cash sale of `productId` by `phone` (its own receipt code).
+  function saleOp(phone, productId, extra = {}, type = 'sale.create') {
+    counter += 1;
+    const code = phone.devices.get(business).deviceCode;
+    return op(type, {
+      saleId: randomUUID(), receiptNumber: `${code}-${String(counter).padStart(5, '0')}`, locationId, customerId: null, priceType: 'retail',
+      items: [{ itemId: randomUUID(), productId, sizeId: null, quantityUnits: 1, productVersion: 1, setPriceMinor: 5000, agreedPriceMinor: 5000, lineTotalMinor: 5000 }],
+      payments: [{ paymentId: randomUUID(), method: 'cash', amountMinor: 5000 }],
+      subtotalMinor: 5000, paidMinor: 5000, creditMinor: 0, recordedAt: new Date().toISOString(), ...extra,
+    });
+  }
+
+  test('two phones sell the last item at the same moment: both saved, stock below zero, one flagged belowZeroOnArrival', async () => {
+    const productId = await sandal(1);
+    const { phone: manager } = await staffPhone(owner, business, 'manager');
+    const [a, b] = await Promise.all([owner.push(business, [saleOp(owner, productId)]), manager.push(business, [saleOp(manager, productId)])]);
+    const results = [a, b].map((r) => r.body.results[0]);
+    expect(results.map((r) => r.status)).toEqual(['saved', 'saved']);
+    expect(results.map((r) => r.result.flags.belowZeroOnArrival).sort()).toEqual([false, true]);
+    expect(await checkStock(db.getSequelize())).toEqual([]);
+  });
+
+  test('two sales with the same receipt number at the same moment (a forced clash): one saved, one RECEIPT_NUMBER_TAKEN', async () => {
+    const productId = await sandal(5);
+    const first = saleOp(owner, productId);
+    const second = saleOp(owner, productId, { receiptNumber: first.payload.receiptNumber });
+    const [a, b] = await Promise.all([owner.push(business, [first]), owner.push(business, [second])]);
+    const outcomes = [a, b].map((r) => r.body.results[0].status === 'saved' ? 'saved' : r.body.results[0].error.code).sort();
+    expect(outcomes).toEqual(['RECEIPT_NUMBER_TAKEN', 'saved']);
+    expect(await models().ReceiptNumber.count({ where: { businessId: business, receiptNumber: first.payload.receiptNumber } })).toBe(1);
+  });
+
+  test('a deadlock forced during a sale is retried: the sale exists once, with one registry row and one set of movements', async () => {
+    const productId = await sandal(5);
+    faults.saleDeadlocksRemaining = 1;
+    const sale = saleOp(owner, productId, {}, 'test.saleDeadlockOnce');
+    expect((await owner.push(business, [sale])).body.results[0].status).toBe('saved');
+    expect(faults.saleDeadlocksRemaining).toBe(0);
+    expect(await models().Sale.count({ where: { businessId: business, id: sale.payload.saleId } })).toBe(1);
+    expect(await models().ReceiptNumber.count({ where: { businessId: business, recordId: sale.payload.saleId } })).toBe(1);
+    expect(await models().StockMovement.count({ where: { businessId: business, saleId: sale.payload.saleId } })).toBe(1);
+  });
+
+  test('a sale whose answer is lost: the retry gets "duplicate" and the sale exists once', async () => {
+    const productId = await sandal(5);
+    const sale = saleOp(owner, productId);
+    expect((await owner.push(business, [sale], { loseResponse: true })).lost).toBe(true);
+    await new Promise((r) => setTimeout(r, 300));
+    expect((await owner.push(business, [sale])).body.results[0].status).toBe('duplicate');
+    expect(await models().Sale.count({ where: { businessId: business, id: sale.payload.saleId } })).toBe(1);
+  });
+
+  test('a sale recorded before a count but arriving after it doesn\'t change stock on hand', async () => {
+    const productId = await sandal(10);
+    const countedAt = new Date(Date.now() - 60000).toISOString();
+    const counted = await owner.push(business, [op('stockCount.create', {
+      countId: randomUUID(), locationId, productId, sizeId: null, countedUnits: 9, baselineUnits: 10, baselineCursor: 0, reason: 'lost_or_stolen', recordedAt: countedAt,
+    })]);
+    expect(counted.body.results[0].result.stockOnHandUnits).toBe(9);
+    const late = await owner.push(business, [saleOp(owner, productId, { recordedAt: new Date(Date.now() - 120000).toISOString() })]);
+    expect(late.body.results[0].status).toBe('saved');
+    const movements = await models().StockMovement.findAll({ where: { businessId: business, productId } });
+    const counts = await models().StockCount.findAll({ where: { businessId: business, productId } });
+    expect(require('../../src/services/stockRule').stockOnHand({ movements, counts })).toBe(9);
+  });
+
+  test('two price edits racing a sale on the older version: all saved; the sale keeps the price it was shown', async () => {
+    const productId = await sandal(5);
+    const { phone: manager } = await staffPhone(owner, business, 'manager');
+    const edit = (retailMinor) => op('product.upsert', { productId, baseVersion: 1, fields: { retailMinor } });
+    const sale = saleOp(owner, productId);
+    const [a, b, c] = await Promise.all([owner.push(business, [edit(5500)]), manager.push(business, [edit(6000)]), owner.push(business, [sale])]);
+    expect([a, b, c].map((r) => r.body.results[0].status)).toEqual(['saved', 'saved', 'saved']);
+    const item = await models().SaleItem.findOne({ where: { businessId: business, saleId: sale.payload.saleId } });
+    expect([item.productVersion, Number(item.setPriceMinor)]).toEqual([1, 5000]);
+    const stored = await models().Sale.findByPk(sale.payload.saleId);
+    expect(typeof stored.flags.olderPrice).toBe('boolean'); // true when an edit committed first
+    expect(await models().PriceVersion.count({ where: { businessId: business, productId } })).toBe(3);
+  });
+});
+
 describe('pulls', () => {
   test('an associate\'s page of only hidden rows still moves the cursor: no endless asking', async () => {
     const { phone } = await staffPhone(owner, business, 'associate');
@@ -369,11 +464,13 @@ describe('pulls', () => {
     ]);
     const types = (rows) => new Set(rows.map((r) => r.type));
     const ownerRows = await allRows(owner);
-    expect(types(ownerRows)).toEqual(new Set(['settings', 'location', 'membership', 'device', 'product', 'size', 'stockMovement']));
+    expect(types(ownerRows)).toEqual(new Set(['settings', 'location', 'membership', 'device', 'product', 'size', 'stockMovement', 'stockCount', 'sale']));
     expect(ownerRows.filter((r) => r.type === 'product' || r.type === 'size').every((r) => 'costMinor' in r.data)).toBe(true);
     for (const phone of [manager, associate]) {
       const rows = await allRows(phone);
-      expect(types(rows)).toEqual(new Set(['settings', 'location', 'product', 'size', 'stockMovement']));
+      // Associates see no one else's sales (this one made none); managers see them all.
+      expect(types(rows)).toEqual(new Set(['settings', 'location', 'product', 'size', 'stockMovement', 'stockCount', ...(phone === manager ? ['sale'] : [])]));
+      if (phone === manager) rows.filter((r) => r.type === 'sale').forEach((r) => r.data.items.forEach((i) => expect(i).not.toHaveProperty('unitCostMinor')));
       expect(rows.some((r) => 'costMinor' in r.data)).toBe(false);
       const stockFields = rows.filter((r) => r.type === 'stockMovement').flatMap((r) => Object.keys(r.data));
       if (phone === associate) expect(stockFields.some((k) => ['type', 'reason', 'note', 'flags', 'recordedBy'].includes(k))).toBe(false);
@@ -413,6 +510,8 @@ describe('afterwards', () => {
   test('check:sequences, check:operations and check:stock find nothing wrong', async () => {
     const sequelize = db.getSequelize();
     expect(await checkStock(sequelize)).toEqual([]);
+    expect(await checkReceipts(sequelize)).toEqual([]);
+    expect(await checkBalances(sequelize)).toEqual([]);
     expect(await checkSequences(sequelize)).toEqual([]);
     expect(await checkOperations(sequelize)).toEqual([]);
   });

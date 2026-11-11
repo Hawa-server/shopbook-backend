@@ -4,7 +4,6 @@
 const { normalizePhone } = require('../../src/lib/phone');
 const { formatMoney } = require('../../src/locale/money');
 const locale = require('../../src/locale');
-const { assertPaymentMethodEnabled } = require('../../src/services/payments');
 
 describe('normalizePhone (E.164, launch: Ghana)', () => {
   test.each([
@@ -74,14 +73,5 @@ describe('the reference data', () => {
     expect(data.languages.map((l) => [l.tag, l.status])).toEqual([['en', 'complete'], ['tw', 'draft']]);
     expect(data.paymentMethods.map((p) => p.code)).toEqual(['cash', 'mobile_money']);
     expect(data.defaults).toEqual({ country: 'GH', language: 'en' });
-  });
-});
-
-describe('payment methods', () => {
-  test("only the business's own methods are accepted", () => {
-    expect(() => assertPaymentMethodEnabled(['cash', 'mobile_money'], 'mobile_money')).not.toThrow();
-    expect(() => assertPaymentMethodEnabled(['cash'], 'mobile_money')).toThrow(expect.objectContaining({ code: 'PAYMENT_METHOD_NOT_ENABLED' }));
-    expect(() => assertPaymentMethodEnabled(['cash', 'mobile_money'], 'card')).toThrow(expect.objectContaining({ code: 'PAYMENT_METHOD_NOT_ENABLED' }));
-    expect(() => assertPaymentMethodEnabled(['cash'], 'momo')).toThrow(expect.objectContaining({ code: 'PAYMENT_METHOD_NOT_ENABLED' }));
   });
 });

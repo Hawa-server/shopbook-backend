@@ -297,34 +297,204 @@ function defineModels(sequelize) {
     serverSeq: { type: DataTypes.BIGINT.UNSIGNED, allowNull: true },
   }, { freezeTableName: true, timestamps: false });
 
+  // A customer (BE8 creates them; BE9 edits them and sets credit limits).
+  // balanceMinor and oldestUnpaidAt are a server-made cache, never sent by phones.
+  const Customer = sequelize.define('Customer', {
+    id,
+    businessId: ref(),
+    name: { type: DataTypes.STRING(80), allowNull: false }, // up to 80 since BE9 (Epic 4 AC1)
+    nameNormalized: { type: DataTypes.STRING(80), allowNull: false },
+    phone: { type: DataTypes.STRING(16), allowNull: true }, // E.164; never logged
+    language: { type: DataTypes.STRING(16), allowNull: false },
+    isHidden: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+    creditLimitMinor: money(),
+    balanceMinor: { type: DataTypes.BIGINT, allowNull: false, defaultValue: 0 },
+    oldestUnpaidAt: time(),
+    version: { type: DataTypes.INTEGER.UNSIGNED, allowNull: false, defaultValue: 1 },
+    createdBy: ref(),
+    updatedBy: ref(true),
+    serverSeq: { type: DataTypes.BIGINT.UNSIGNED, allowNull: true },
+    createdAt: time(false),
+    updatedAt: time(false),
+  }, common);
+
+  // Sales (BE8): PERMANENT records. A sale's lines and payments are pulled
+  // inside the sale's own row (they have no serverSeq of their own).
+  const Sale = sequelize.define('Sale', {
+    id,
+    businessId: ref(),
+    locationId: ref(),
+    deviceId: ref(),
+    receiptNumber: { type: DataTypes.STRING(20), allowNull: false },
+    customerId: ref(true),
+    priceType: { type: DataTypes.ENUM('retail', 'wholesale'), allowNull: false },
+    subtotalMinor: money(false),
+    paidMinor: money(false),
+    creditMinor: money(false),
+    flags: { type: DataTypes.JSON, allowNull: false }, // set once on save; some are owner/manager only (src/sync/pull.js)
+    recordedBy: ref(),
+    recordedAt: time(false),
+    receivedAt: time(false),
+    serverSeq: { type: DataTypes.BIGINT.UNSIGNED, allowNull: true },
+  }, { freezeTableName: true, timestamps: false });
+
+  const SaleItem = sequelize.define('SaleItem', {
+    id,
+    businessId: ref(),
+    saleId: ref(),
+    productId: ref(),
+    sizeId: ref(true),
+    productName: { type: DataTypes.STRING(80), allowNull: false }, // copies at the time of the sale
+    sizeLabel: { type: DataTypes.STRING(20), allowNull: true },
+    unit: { type: DataTypes.ENUM('piece', 'pair', 'set', 'dozen', 'yard', 'custom'), allowNull: false },
+    unitLabel: { type: DataTypes.STRING(20), allowNull: true },
+    unitScale: { type: DataTypes.TINYINT.UNSIGNED, allowNull: false },
+    quantityUnits: { type: DataTypes.INTEGER, allowNull: false },
+    productVersion: { type: DataTypes.INTEGER.UNSIGNED, allowNull: false },
+    sizeVersion: { type: DataTypes.INTEGER.UNSIGNED, allowNull: true },
+    setPriceMinor: money(false),
+    agreedPriceMinor: money(false),
+    lineTotalMinor: money(false),
+    priceNote: { type: DataTypes.STRING(200), allowNull: true },
+    unitCostMinor: money(), // OWNER ONLY, set by the server from the version's cost
+  }, { freezeTableName: true, timestamps: false });
+
+  const SalePayment = sequelize.define('SalePayment', {
+    id,
+    businessId: ref(),
+    saleId: ref(),
+    method: { type: DataTypes.STRING(30), allowNull: false },
+    amountMinor: money(false),
+  }, { freezeTableName: true, timestamps: false });
+
+  // Debts (BE9). Repayments, write-offs and debts brought forward are
+  // PERMANENT records; a mistake is fixed by a REVERSAL (a record of the same
+  // kind pointing at the original with corrects…Id), never by an edit.
+  const reversalOf = (column) => ({ [column]: ref(true), correctionReason: { type: DataTypes.STRING(200), allowNull: true } });
+  const Repayment = sequelize.define('Repayment', {
+    id,
+    businessId: ref(),
+    customerId: ref(),
+    deviceId: ref(),
+    receiptNumber: { type: DataTypes.STRING(20), allowNull: false },
+    amountMinor: money(false),
+    method: { type: DataTypes.STRING(30), allowNull: false },
+    note: { type: DataTypes.STRING(200), allowNull: true },
+    ...reversalOf('correctsRepaymentId'),
+    flags: { type: DataTypes.JSON, allowNull: false }, // set once: overpaid, methodDisabled, clockSkew
+    recordedBy: ref(),
+    recordedAt: time(false),
+    receivedAt: time(false),
+    serverSeq: { type: DataTypes.BIGINT.UNSIGNED, allowNull: true },
+  }, { freezeTableName: true, timestamps: false });
+
+  const DebtWriteOff = sequelize.define('DebtWriteOff', {
+    id,
+    businessId: ref(),
+    customerId: ref(),
+    amountMinor: money(false),
+    reason: { type: DataTypes.ENUM('moved', 'died', 'disputed', 'other'), allowNull: false },
+    note: { type: DataTypes.STRING(200), allowNull: true },
+    ...reversalOf('correctsDebtWriteOffId'),
+    recordedBy: ref(),
+    recordedAt: time(false),
+    receivedAt: time(false),
+    serverSeq: { type: DataTypes.BIGINT.UNSIGNED, allowNull: true },
+  }, { freezeTableName: true, timestamps: false });
+
+  const OpeningDebt = sequelize.define('OpeningDebt', {
+    id,
+    businessId: ref(),
+    customerId: ref(),
+    deviceId: ref(),
+    amountMinor: money(false),
+    owedSince: { type: DataTypes.DATEONLY, allowNull: false }, // a business date (the business's time zone)
+    note: { type: DataTypes.STRING(200), allowNull: true },
+    ...reversalOf('correctsOpeningDebtId'),
+    recordedBy: ref(),
+    recordedAt: time(false),
+    receivedAt: time(false),
+    serverSeq: { type: DataTypes.BIGINT.UNSIGNED, allowNull: true },
+  }, { freezeTableName: true, timestamps: false });
+
+  // Worked-out debt tables (projections, never sent to phones): rebuilt from
+  // the permanent records by src/services/debtLots.js, the ONLY code allowed
+  // to delete their rows (one customer at a time, in an operation's transaction).
+  const DebtLot = sequelize.define('DebtLot', {
+    id,
+    businessId: ref(),
+    customerId: ref(),
+    sourceType: { type: DataTypes.ENUM('opening_debt', 'credit_sale', 'exchange_credit'), allowNull: false },
+    sourceId: ref(),
+    originalMinor: money(false),
+    outstandingMinor: money(false),
+    effectiveAt: time(false),
+    orderKey: { type: DataTypes.STRING(120), allowNull: false },
+  }, { freezeTableName: true, timestamps: false });
+
+  const CreditLot = sequelize.define('CreditLot', {
+    id,
+    businessId: ref(),
+    customerId: ref(),
+    sourceType: { type: DataTypes.ENUM('repayment_excess', 'write_off_excess', 'return_kept_as_credit', 'return_excess'), allowNull: false },
+    sourceId: ref(),
+    originalMinor: money(false),
+    remainingMinor: money(false),
+    effectiveAt: time(false),
+    orderKey: { type: DataTypes.STRING(120), allowNull: false },
+  }, { freezeTableName: true, timestamps: false });
+
+  const DebtAllocation = sequelize.define('DebtAllocation', {
+    id,
+    businessId: ref(),
+    customerId: ref(),
+    debtLotId: ref(),
+    sourceType: { type: DataTypes.ENUM('repayment', 'write_off', 'return_debt', 'credit_lot'), allowNull: false },
+    sourceId: ref(),
+    amountMinor: money(false),
+    orderKey: { type: DataTypes.STRING(120), allowNull: false },
+  }, { freezeTableName: true, timestamps: false });
+
   // Associations used to read a person's businesses with their names, and a
   // business's members with their accounts.
   Membership.belongsTo(Business, { foreignKey: 'businessId', as: 'business' });
   Business.hasOne(BusinessSettings, { foreignKey: 'businessId', as: 'settings' });
   Membership.belongsTo(User, { foreignKey: 'userId', as: 'user' });
   Device.belongsTo(User, { foreignKey: 'userId', as: 'user' });
+  Sale.hasMany(SaleItem, { foreignKey: 'saleId', as: 'items' });
+  Sale.hasMany(SalePayment, { foreignKey: 'saleId', as: 'payments' });
 
   return {
     User, Business, BusinessSettings, Location, Membership, EmailToken, ChangeLog,
     Device, DeviceRequestNonce, DeviceChallenge, SyncSequence, ProcessedOperation, ReceiptNumber,
-    Product, ProductSize, PriceVersion, StockMovement, StockCount,
+    Product, ProductSize, PriceVersion, StockMovement, StockCount, Customer, Sale, SaleItem, SalePayment,
+    Repayment, DebtWriteOff, OpeningDebt, DebtLot, CreditLot, DebtAllocation,
   };
 }
 
 // The models holding ONE business's data (they have a businessId column).
 // Route handlers reach them only through scoped() (src/services/scoped.js);
 // a test fails the build otherwise. Every later business table joins this list.
-const BUSINESS_MODELS = ['BusinessSettings', 'Location', 'Membership', 'ChangeLog', 'Device', 'DeviceRequestNonce', 'DeviceChallenge', 'ProcessedOperation', 'ReceiptNumber', 'Product', 'ProductSize', 'PriceVersion', 'StockMovement', 'StockCount'];
+const BUSINESS_MODELS = ['BusinessSettings', 'Location', 'Membership', 'ChangeLog', 'Device', 'DeviceRequestNonce', 'DeviceChallenge', 'ProcessedOperation', 'ReceiptNumber', 'Product', 'ProductSize', 'PriceVersion', 'StockMovement', 'StockCount', 'Customer', 'Sale', 'SaleItem', 'SalePayment',
+  'Repayment', 'DebtWriteOff', 'OpeningDebt', 'DebtLot', 'CreditLot', 'DebtAllocation'];
 
 // The tables phones pull (each row has a serverSeq), and the pull row type of each.
 const SYNCED_MODELS = {
   BusinessSettings: 'settings', Location: 'location', Membership: 'membership', Device: 'device', Product: 'product', ProductSize: 'size',
-  StockMovement: 'stockMovement', StockCount: 'stockCount',
+  StockMovement: 'stockMovement', StockCount: 'stockCount', Customer: 'customer', Sale: 'sale',
+  Repayment: 'repayment', DebtWriteOff: 'debtWriteOff', OpeningDebt: 'openingDebt',
 };
 
 // Permanent records (sales, repayments, stock movements…): never updated or
 // deleted; scoped().update refuses every model listed here. PriceVersion
-// (BE6), stock movements and counts (BE7); BE8 adds sales.
-const PERMANENT_MODELS = ['PriceVersion', 'StockMovement', 'StockCount'];
+// (BE6), stock movements and counts (BE7), sales with their lines and
+// payments (BE8).
+const PERMANENT_MODELS = ['PriceVersion', 'StockMovement', 'StockCount', 'Sale', 'SaleItem', 'SalePayment', 'Repayment', 'DebtWriteOff', 'OpeningDebt'];
 
-module.exports = { defineModels, BUSINESS_MODELS, PERMANENT_MODELS, SYNCED_MODELS };
+// The worked-out debt tables (BE9): the ONLY business tables whose rows may
+// be deleted outside deleteBusinessData, and only by src/services/debtLots.js
+// when it rebuilds one customer (approved by the owner, 11 Nov 2026). A test
+// fails if a permanent table is ever added here.
+const PROJECTION_MODELS = ['DebtAllocation', 'CreditLot', 'DebtLot'];
+
+module.exports = { defineModels, BUSINESS_MODELS, PERMANENT_MODELS, PROJECTION_MODELS, SYNCED_MODELS };
