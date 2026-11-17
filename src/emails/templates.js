@@ -1,26 +1,28 @@
 // The account emails, in English and Twi. Each template takes the person's
 // name and a link (or a masked address) and returns a subject and plain text.
 // Plain text only: it reads well on every phone and can't hide a link
-// behind different wording.
+// behind different wording. The product's name comes from src/brand.js.
 //
 // [DRAFT: to be checked] The Twi ('tw') versions are NOT translated yet: they
 // repeat the English text until a Twi speaker writes and checks them
 // (backlog, "Still to decide" 4). Replace each `tw` entry when ready.
 
+const { PRODUCT_NAME } = require('../brand');
+
 const templates = {
   // Sent at sign-up, and by "Send the link again", to confirm the address.
   confirm_email: {
     en: ({ name, link }) => ({
-      subject: 'Confirm your email for Shop Book',
-      text: `Hello ${name},\n\nTap this link to confirm your email address for Shop Book:\n\n${link}\n\nThe link works once and expires in 24 hours.\n\nIf you didn't sign up for Shop Book, you can ignore this email.`,
+      subject: `Confirm your email for ${PRODUCT_NAME}`,
+      text: `Hello ${name},\n\nTap this link to confirm your email address for ${PRODUCT_NAME}:\n\n${link}\n\nThe link works once and expires in 24 hours.\n\nIf you didn't sign up for ${PRODUCT_NAME}, you can ignore this email.`,
     }),
   },
 
   // Sent to a NEW address when someone asks to change their email.
   change_email: {
     en: ({ name, link }) => ({
-      subject: 'Confirm your new email for Shop Book',
-      text: `Hello ${name},\n\nTap this link to make this your Shop Book email address:\n\n${link}\n\nThe link works once and expires in 24 hours. Until you tap it, your old email stays in use.\n\nIf you didn't ask for this, you can ignore this email.`,
+      subject: `Confirm your new email for ${PRODUCT_NAME}`,
+      text: `Hello ${name},\n\nTap this link to make this your ${PRODUCT_NAME} email address:\n\n${link}\n\nThe link works once and expires in 24 hours. Until you tap it, your old email stays in use.\n\nIf you didn't ask for this, you can ignore this email.`,
     }),
   },
 
@@ -28,8 +30,8 @@ const templates = {
   // person whose account was taken over finds out.
   email_changed: {
     en: ({ name, newEmailMasked }) => ({
-      subject: 'Your Shop Book email is being changed',
-      text: `Hello ${name},\n\nSomeone signed in to your Shop Book account asked to change its email to ${newEmailMasked}.\n\nIf this was you, there's nothing more to do.\n\nIf it wasn't you, sign in to Shop Book and change your password straight away, or ask your shop owner for help.`,
+      subject: `Your ${PRODUCT_NAME} email is being changed`,
+      text: `Hello ${name},\n\nSomeone signed in to your ${PRODUCT_NAME} account asked to change its email to ${newEmailMasked}.\n\nIf this was you, there's nothing more to do.\n\nIf it wasn't you, sign in to ${PRODUCT_NAME} and change your password straight away, or ask your shop owner for help.`,
     }),
   },
 
@@ -38,15 +40,15 @@ const templates = {
   device_added: {
     en: ({ name, deviceName, personName, businessName }) => ({
       subject: `A new phone was added to ${businessName}`,
-      text: `Hello ${name},\n\nA new phone, "${deviceName}", was added to ${businessName} by ${personName}.\n\nIf you don't recognise it, open Shop Book, go to More → Phones, and remove it. Then ask ${personName} to change their password.`,
+      text: `Hello ${name},\n\nA new phone, "${deviceName}", was added to ${businessName} by ${personName}.\n\nIf you don't recognise it, open ${PRODUCT_NAME}, go to More → Phones, and remove it. Then ask ${personName} to change their password.`,
     }),
   },
 
   // Sent by "Forgot password" to a confirmed email.
   reset_password: {
     en: ({ name, link }) => ({
-      subject: 'Reset your Shop Book password',
-      text: `Hello ${name},\n\nTap this link to choose a new Shop Book password:\n\n${link}\n\nThe link works once and expires in 30 minutes. Choosing a new password signs you out on every other phone.\n\nIf you didn't ask for this, you can ignore this email: your password stays the same.`,
+      subject: `Reset your ${PRODUCT_NAME} password`,
+      text: `Hello ${name},\n\nTap this link to choose a new ${PRODUCT_NAME} password:\n\n${link}\n\nThe link works once and expires in 30 minutes. Choosing a new password signs you out on every other phone.\n\nIf you didn't ask for this, you can ignore this email: your password stays the same.`,
     }),
   },
 };

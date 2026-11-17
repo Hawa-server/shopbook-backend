@@ -33,6 +33,10 @@ const productionVars = {
   EMAIL_API_KEY: 'fake-brevo-key',
   EMAIL_FROM_ADDRESS: 'shop@example.test',
   EMAIL_FROM_NAME: 'Shop Book',
+  R2_ACCOUNT_ID: '0123456789abcdef0123456789abcdef',
+  R2_ACCESS_KEY_ID: 'r2-key-for-test',
+  R2_SECRET_ACCESS_KEY: 'r2-secret-for-test',
+  R2_BUCKET: 'tabova-photos-test',
 };
 
 // A stand-in for spawnSync that records what it was asked to run.
@@ -106,5 +110,56 @@ describe('migrate-production guard', () => {
     expect(env.DB_HOST).toBe('mysql-example.aivencloud.test');
     expect(env.SOME_OTHER_SETTING).toBeUndefined();
     expect(env.NODE_ENV).toBe('production');
+  });
+});
+
+// BE6.5: migrations never touch photos, so the migration tools skip ONLY the
+// photo-storage check (the R2 values): the production R2 secret can stay in
+// Render. Every other check still applies, and the server itself still
+// refuses to start in production without the R2 values.
+describe('photo storage and migrations', () => {
+  const { spawnSync } = require('node:child_process');
+  const ROOT = path.join(__dirname, '..');
+  const withoutR2 = Object.fromEntries(Object.entries(productionVars).filter(([key]) => !key.startsWith('R2_')));
+
+  test('the migration script runs with a production file that has no R2 values', () => {
+    const { spawn, calls } = fakeSpawn();
+    const status = migrateProduction({ command: 'db:migrate:status', envFile: envFile('no-r2.env', withoutR2), spawn, write: () => {} });
+    expect(status).toBe(0);
+    expect(calls).toHaveLength(1);
+  });
+
+  test('every other check still applies (here: TRUST_PROXY), and no R2 problem is listed', () => {
+    const { TRUST_PROXY, ...rest } = withoutR2;
+    expect(TRUST_PROXY).toBeDefined();
+    const { spawn, calls } = fakeSpawn();
+    let message = '';
+    try {
+      migrateProduction({ command: 'db:migrate', envFile: envFile('no-r2-no-proxy.env', rest), spawn, write: () => {} });
+    } catch (err) {
+      expect(err).toBeInstanceOf(Refused);
+      message = err.message;
+    }
+    expect(message).toMatch(/TRUST_PROXY is required in production/);
+    expect(message).not.toMatch(/R2_/);
+    expect(calls).toHaveLength(0);
+  });
+
+  test("sequelize-cli's settings (what the script really runs) accept a production environment without R2 values", () => {
+    const result = spawnSync(process.execPath, ['-e', "require('./src/config/sequelize-cli.js'); process.stdout.write('loaded')"], {
+      cwd: ROOT, env: { PATH: process.env.PATH, ...withoutR2 }, encoding: 'utf8', timeout: 30000,
+    });
+    expect(result.stderr).toBe('');
+    expect([result.status, result.stdout]).toEqual([0, 'loaded']);
+  });
+
+  test('the server still refuses to start in production without the R2 values', () => {
+    const result = spawnSync(process.execPath, [path.join(ROOT, 'src/server.js')], {
+      env: { PATH: process.env.PATH, ...withoutR2 }, encoding: 'utf8', timeout: 30000,
+    });
+    expect(result.status).toBe(1);
+    for (const name of ['R2_ACCOUNT_ID', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'R2_BUCKET']) {
+      expect(result.stderr).toContain(`${name} is required in production`);
+    }
   });
 });

@@ -857,3 +857,91 @@ A credit sale needs a customer, and the seller may add one in the middle of a sa
 ### The first sale locks the currency
 
 The business's first money record sets `moneyRecordedAt`. From then on its country, currency and time zone can't change (`localeLocked`), because every stored amount and business day would suddenly mean something else.
+
+---
+
+## BE9: customers, credit and repayments
+
+### What a customer owes is worked out, never typed
+
+A customer's balance isn't a number anyone edits. It comes from the **permanent records**: credit sales, debts brought forward from the notebook, repayments and write-offs. The server works it out with **the debt rule** (`src/services/debtRule.js`):
+
+1. Every debt (a sale's credit part, a debt brought forward) becomes a **debt lot**.
+2. Every repayment or write-off pays the **oldest** lots first (Decision 4-7), and each payment is written down as an **allocation**: "this repayment paid 300.00 off that lot".
+3. Money paid beyond what's owed becomes a **credit lot** (the shop owes the customer), and the next debt uses it first.
+4. The balance is what the lots still owe minus the credit left; "owed since" (`oldestUnpaidAt`) is the start of the oldest lot not yet fully paid.
+
+The plan's worked example is a test: Ama owes GH₵ 500.00 from the notebook (lot A), buys GH₵ 300.00 on credit (lot B), and repays GH₵ 400.00. The oldest is paid first, so A goes down to 100.00. She returns GH₵ 100.00 of goods from the newer sale: that reduces **B**, to 200.00. Balance 300.00, owed since lot A's date.
+
+### The same answer whatever order records arrive in
+
+Phones are offline, so records reach the server in any order: a sale made on Monday may arrive after Wednesday's repayment. The rule puts events in order using only values **on the records themselves**, `(effectiveAt, recordedAt, kindRank, id)`, never the order they arrived in. So the same records always give the same lots, allocations and balance; a test pushes them in 20 shuffled orders. Even the IDs of lots and allocations are made from their sources (a hash), so a rebuild gives identical rows.
+
+### Fast, without ever being wrong
+
+Redoing a customer's whole history at every sale would get slower as the years go by. So the server has two paths through **one** rule (`src/services/debtLots.js`):
+
+- **The usual case:** the new record is the customer's newest. It's applied on top of their open lots only (8.8 ms with 5,000 records behind it, on this machine).
+- **A late record or a reversal:** the customer is rebuilt in full from their records (about 400 ms for 5,000), and only the rows that actually changed are written.
+
+`check:balances` rebuilds every customer in full and compares, so the fast path is always checked against the slow, obvious one.
+
+The worked-out rows (lots and allocations) **aren't records**: they're a view, rebuilt whenever needed, so they're the one kind of business row the server may delete outside `deleteBusinessData`. Only the debt-lot service may, only for one customer, inside the operation's transaction, and never a permanent table (a test pins that list; approved 11 Nov 2026).
+
+### Lock first, then read
+
+Two phones changing the same customer at once must not each work out a balance from old data. Every debt operation **locks the customer first**, so the second waits for the first. There's a subtle MySQL rule underneath: in a transaction, the **first ordinary read** fixes what that transaction can see from then on. If an operation read anything before waiting for the lock, it could miss a record another phone saved during the wait. That's why a reversal names its customer: the server locks the customer before it reads the original. The race tests (`npm run test:concurrency`) found this, by running two reversals of the same repayment at once 20 times.
+
+### Real money is never refused
+
+- **Overpaid:** two phones each take money for the same debt offline, and together it's more than was owed. Both are saved (the money was really received), the customer is **in credit** ("Shop owes Ama GH₵ 20.00"), the next credit sale uses that credit, and the repayment is flagged `overpaid` for the owner and manager (Decision 4-5).
+- **A switched-off payment method** is saved and flagged `methodDisabled`; only a method that doesn't exist at all is refused.
+
+### Mistakes are reversed, never edited (Decision 4-9)
+
+A wrong repayment, write-off or debt brought forward is cancelled by a **reversal**: a record of the same kind pointing at the original, with a reason. It cancels it **in full** (the server copies the amount, so nothing is typed twice), and the right amount is then recorded as a new record. A record can be reversed **once** (a unique key in the database), and a reversal can't be reversed. Both stay in the history. A repayment's reversal gets its own receipt: "Reversal of K7M-0043".
+
+### Who may do what
+
+- **Anyone** adds customers and records repayments (F-17).
+- **The owner and manager** edit customers, correct repayments and add debts brought forward.
+- **The owner alone** sets credit limits and writes off debts.
+- Associates receive only their own repayments, and no write-offs or debts brought forward; they still see every customer's balance, which is what they need to sell and collect.
+
+### A customer's history needs the internet
+
+The history with "balance after each" (AC20) comes from the server (`GET /api/customers/:customerId/history`), because only the server has every record and the rules. Each entry is a running total in the rule's order, and the newest one always equals the customer's balance.
+
+### How existing credit sales got their lots
+
+BE8 kept a simple cached balance on each customer. The BE9 migration creates the lot tables, then runs **the same rebuild code** the server uses for every customer who has a credit sale, in one transaction. Their balances come out exactly as before (nothing but credit sales existed), and `check:balances` confirms it.
+
+## The product's name: Tabova (11 Nov 2026)
+
+The product is called **Tabova**; "Shop Book" was its working name and stays in internal names (database names, folders, the package name, code comments). The name people *see* lives in **one constant**, `PRODUCT_NAME` in `src/brand.js`. The account emails, the privacy notice and terms (written as `{{productName}}` in `legal/*.md` and filled in when the server starts) and two error messages read it from there. Why one constant: a rename then changes one line, and a test (`tests/unit/brand.test.js`) fails if any email or legal text still says "Shop Book" or has an unfilled placeholder. The terms version stayed at `1`: a new name doesn't change what anyone agreed to, so nobody is asked to accept again.
+
+## BE6.5: Product photos
+
+**What it does.** A product can have one photo so sellers recognise it at a glance. The phone shrinks the photo to about 600 px and re-saves it through a canvas (which also throws away the camera's hidden details, such as the GPS position where it was taken), gives it its own ID (`photoId`), and saves the product straight away with that ID, even offline. The photo itself is uploaded **separately**, in the background, with `PUT /api/photos/:photoId`, and retried until it works. Anyone in the team downloads it with `GET /api/photos/:photoId`.
+
+**Why the photo isn't part of sync.** Sync operations are small JSON records the server applies in one transaction. A photo is a 60 KB file that can take a while on a slow connection. If photos were sync operations, one slow photo would hold up every sale behind it in the outbox. So the product only *refers* to the photo, and the server accepts that reference even before the photo has arrived: **a photo can never stop a product or a sale from syncing**. Until it arrives, everyone sees a placeholder.
+
+**Where photos live: object storage (Cloudflare R2).** A database is good at rows, not files. Photos would quickly fill the small free MySQL and make its backups slow. Render's free disk is wiped whenever the server restarts. So the files go to **R2**, an "object storage" service: a big private folder of files, each with a name (its *key*). The database keeps only a small `Photo` row saying where the file is. The bucket is **private**: phones never see its address; they ask the API, and the API fetches the file. R2 speaks the same language as Amazon S3, where every request must be signed with a secret key ("AWS Signature V4"). The small `aws4fetch` library does that signing, and Node's own `fetch` sends the request.
+
+**One interface, three places** (`src/lib/photoStorage.js`): `put`, `get`, `remove`. In production it talks to R2; in development it writes to a local folder (`.photos`, Git-ignored); in tests it keeps files in memory, and tests can make the next write fail on purpose. The rest of the code doesn't know or care which one it's using. (Same idea as the email sender.)
+
+**Checking a file without trusting it** (`src/lib/imageCheck.js`). Anyone can *call* a file "image/jpeg". The server ignores the label and reads the first bytes: a JPEG always starts `FF D8 FF`, a WebP with `RIFF…WEBP`. Anything else is refused, and **SVG on purpose**: an SVG is really a small program-like document that can contain script. It also reads the picture's width and height from its header (no image library needed) and refuses more than 300 KB or 1,600 px. Then it looks for **EXIF** and **XMP**, the hidden blocks where cameras store GPS position, phone model and time. A canvas never writes them, so a photo that still has them means the app skipped the re-save step: refused, so a shop's location can't leak. Harmless blocks a canvas *does* write (JPEG's "JFIF" header, colour profiles) are allowed. The tests use photos made by a real canvas in Chrome, the same way the app makes them.
+
+**Never overwritten.** A `photoId`'s bytes never change. The server stores the file under `<businessId>/<photoId>/<fingerprint>`, where the fingerprint (SHA-256) is worked out from the bytes. Uploading the same photo twice (the phone didn't get the first answer) just answers 200 again. Different bytes for the same `photoId` are refused (`PHOTO_ID_TAKEN`); the phone makes a new ID. Because nothing changes, the phone may cache a download for a year (`Cache-Control: private, max-age=31536000, immutable`).
+
+**Order matters: file first, row second.** On upload, the server stores the file and only *then* writes the `Photo` row. If storing fails, there's no row pointing at nothing; the phone gets 503 and retries. The clean-up does the opposite order for the same reason: file first, then the row. If it stops halfway, the worst case is a row with no file, which the download answers with 404, and **a phone that still has the photo uploads it again** (api.md tells the app to do that). Uploading the same bytes again rewrites the file, so it heals.
+
+**The clean-up rule** (approved by the owner; in `src/services/housekeeping.js`, pinned by a code-rule test). Photos aren't permanent records, but every delete in this project needs a named, approved rule. After each upload, the server deletes at most 20 of *that business's* photos that **no product uses** and have been **unused for 30 days**. "Unused since when?" is `releasedAt`: when a product last let go of the photo (set by `product.upsert` when the photo is replaced or removed), or the upload time if no product ever used it. The final `DELETE` re-checks "no product uses it" at that very moment, so a product that picked the photo again in the meantime keeps it.
+
+**A photo change is a normal product edit.** It gets a new version, a `ChangeLog` entry, and a `PriceVersion` row with the same prices as before. That last part looks odd but matters: a sale names the product version its phone saw, and the server checks the price against that version. A version with no price row would make the next sale fail.
+
+**Isolation.** The storage key is built only from the business the server chose for the request (from the database) and a checked UUID, never from anything the phone typed, and the storage itself refuses any other key shape. Another business's photo is answered 404 on download, and on upload `PHOTO_ID_TAKEN`, the same answer as any used ID, so it says nothing about the other business.
+
+**Trying it yourself.** `npm run check:photo-storage` writes, reads back and removes one test photo in whatever storage `.env` says (put your development R2 bucket's values there to check R2). In Postman, the BE6.5 folder uploads `tests/fixtures/photos/canvas.webp` (Body → binary) with signing headers from `npm run dev:sign -- headers … --body-file <the file>`.
+
+**Why migrations don't ask for the R2 values (17 Nov 2026).** The environment check runs both when the server starts and when migrations run, so at first the production migration script refused to run without the production R2 secret. But migrations only change tables; they never touch photos. Asking for a secret a tool doesn't use just spreads that secret around (here, onto a laptop), so the photo-storage check now lives in its own small function (`photoStorageProblems`) that the migration tools skip (`parseEnv(…, { skipPhotoStorage: true })`). Everything else is still checked for them, and the server still refuses to start in production without the R2 values; tests check all three.

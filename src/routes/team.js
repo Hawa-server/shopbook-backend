@@ -26,6 +26,7 @@ const { stampSequence } = require('../sync/runOperation');
 const { scoped } = require('../services/scoped');
 const { updateUser } = require('../services/users');
 const accounts = require('../services/accounts');
+const { PRODUCT_NAME } = require('../brand');
 
 const PHONE_MESSAGE = 'Enter a valid mobile number, for example 024 123 4567.';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -262,7 +263,7 @@ function resetPassword(deps) {
       if (!m.isActive) throw new AppError(409, 'MEMBER_REMOVED', 'This person is no longer in your team.');
 
       if (await accounts.belongsToAnotherRealBusiness(models, transaction, { userId: m.userId, businessId: req.business.id })) {
-        throw new AppError(403, 'RESET_NOT_ALLOWED', 'This person also uses Shop Book with another business. They can reset their password by email, or ask for help.');
+        throw new AppError(403, 'RESET_NOT_ALLOWED', `This person also uses ${PRODUCT_NAME} with another business. They can reset their password by email, or ask for help.`);
       }
 
       await updateUser(models, transaction, m.userId, { passwordHash, mustChangePassword: true }, { endOtherSignIns: true });

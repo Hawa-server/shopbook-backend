@@ -10,6 +10,8 @@ const { businessRoutes } = require('./business');
 const { deviceRoutes } = require('./devices');
 const { syncRoutes } = require('./sync');
 const { productRoutes } = require('./products');
+const { customerRoutes } = require('./customers');
+const { photoRoutes } = require('./photos');
 
 // Each entry: the HTTP method, the full path (with /api), `business` (true if
 // it works inside one business: it then needs X-Business and requireAuth, and
@@ -28,6 +30,8 @@ const routes = [
   ...deviceRoutes,
   ...syncRoutes,
   ...productRoutes,
+  ...customerRoutes,
+  ...photoRoutes,
 ];
 
 module.exports = { routes };

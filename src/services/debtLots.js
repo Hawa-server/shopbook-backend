@@ -23,6 +23,9 @@ const { startOfDay } = require('../lib/time');
 const { PROJECTION_MODELS } = require('../models');
 
 const num = (v) => Number(v);
+// A time written for a raw SQL statement WITH its milliseconds, in UTC
+// ("2026-11-11 11:18:52.445"). Raw statements would otherwise drop them.
+const sqlTime = (t) => (t == null ? null : new Date(t).toISOString().replace('T', ' ').replace('Z', ''));
 
 // ---- Permanent records → events -------------------------------------------
 
@@ -48,10 +51,11 @@ function inEffect(rows, column) {
 async function loadEvents(models, transaction, { businessId, customerId, timeZone }) {
   const where = { businessId, customerId };
   const [sales, repayments, writeOffs, openings] = await Promise.all([
-    models.Sale.findAll({ where: { ...where, creditMinor: { [Op.gt]: 0 } }, attributes: ['id', 'creditMinor', 'recordedAt'], transaction }),
-    models.Repayment.findAll({ where, attributes: ['id', 'amountMinor', 'recordedAt', 'correctsRepaymentId'], transaction }),
-    models.DebtWriteOff.findAll({ where, attributes: ['id', 'amountMinor', 'recordedAt', 'correctsDebtWriteOffId'], transaction }),
-    models.OpeningDebt.findAll({ where, attributes: ['id', 'amountMinor', 'owedSince', 'recordedAt', 'correctsOpeningDebtId'], transaction }),
+    // Plain rows (raw), not Sequelize objects: thousands of them stay fast.
+    models.Sale.findAll({ where: { ...where, creditMinor: { [Op.gt]: 0 } }, attributes: ['id', 'creditMinor', 'recordedAt'], raw: true, transaction }),
+    models.Repayment.findAll({ where, attributes: ['id', 'amountMinor', 'recordedAt', 'correctsRepaymentId'], raw: true, transaction }),
+    models.DebtWriteOff.findAll({ where, attributes: ['id', 'amountMinor', 'recordedAt', 'correctsDebtWriteOffId'], raw: true, transaction }),
+    models.OpeningDebt.findAll({ where, attributes: ['id', 'amountMinor', 'owedSince', 'recordedAt', 'correctsOpeningDebtId'], raw: true, transaction }),
   ]);
   return [
     ...sales.map(saleEvent),
@@ -66,37 +70,94 @@ async function loadEvents(models, transaction, { businessId, customerId, timeZon
 // Plain rows for the database, with the business and customer.
 const lotRow = (ids, l, amountField) => ({
   id: l.id, ...ids, sourceType: l.sourceType, sourceId: l.sourceId, originalMinor: l.originalMinor, [amountField]: l[amountField],
-  effectiveAt: l.effectiveAt, orderKey: l.orderKey,
+  effectiveAt: sqlTime(l.effectiveAt), orderKey: l.orderKey,
 });
 const allocationRow = (ids, a) => ({ id: a.id, ...ids, debtLotId: a.debtLotId, sourceType: a.sourceType, sourceId: a.sourceId, amountMinor: a.amountMinor, orderKey: a.orderKey });
 
 // Updates the customer's cached balance and oldestUnpaidAt; true if they changed
-// (the caller then gives the customer row a new sequence number).
+// (the caller then gives the customer row a new sequence number). One
+// conditional UPDATE: it only matches when a value really differs.
 async function updateCache(models, transaction, { businessId, customerId }, { balanceMinor, oldestUnpaidAt }) {
-  const customer = await models.Customer.findOne({ where: { businessId, id: customerId }, attributes: ['balanceMinor', 'oldestUnpaidAt'], transaction });
-  const sameOldest = (customer.oldestUnpaidAt?.getTime() ?? null) === (oldestUnpaidAt?.getTime() ?? null);
-  if (num(customer.balanceMinor) === balanceMinor && sameOldest) return false;
-  await models.Customer.update({ balanceMinor, oldestUnpaidAt }, { where: { businessId, id: customerId }, transaction });
-  return true;
+  const [, meta] = await models.Customer.sequelize.query(
+    `UPDATE Customer SET balanceMinor = ?, oldestUnpaidAt = ?
+     WHERE businessId = ? AND id = ? AND NOT (balanceMinor <=> ? AND oldestUnpaidAt <=> ?)`,
+    { replacements: [balanceMinor, sqlTime(oldestUnpaidAt), businessId, customerId, balanceMinor, sqlTime(oldestUnpaidAt)], transaction },
+  );
+  return (meta?.affectedRows ?? meta) > 0;
 }
 
-// The full rebuild of one customer: deletes their worked-out rows and writes
-// them again from the rule. Returns { changed, balanceMinor, oldestUnpaidAt }.
+// The worked-out tables and the fields that make two rows "the same".
+const TABLES = [
+  { model: 'DebtLot', amount: 'outstandingMinor', toRow: (ids, l) => lotRow(ids, l, 'outstandingMinor') },
+  { model: 'CreditLot', amount: 'remainingMinor', toRow: (ids, l) => lotRow(ids, l, 'remainingMinor') },
+  { model: 'DebtAllocation', amount: 'amountMinor', toRow: allocationRow },
+];
+const sameRow = (a, b, amount) => num(a[amount]) === num(b[amount]) && a.orderKey === b.orderKey && num(a.originalMinor ?? 0) === num(b.originalMinor ?? 0);
+
+// Writes plain rows, NEW or CHANGED, with one statement per 500 (no
+// Sequelize objects: fast): a row whose ID exists is updated in place, so
+// allocations pointing at a lot never lose it.
+async function putRows(models, transaction, model, rows) {
+  if (rows.length === 0) return;
+  const sequelize = models[model].sequelize;
+  const columns = Object.keys(rows[0]);
+  const table = models[model].getTableName();
+  for (let i = 0; i < rows.length; i += 500) {
+    const chunk = rows.slice(i, i + 500);
+    await sequelize.query(
+      `INSERT INTO \`${table}\` (${columns.map((c) => `\`${c}\``).join(', ')}) VALUES ${chunk.map(() => `(${columns.map(() => '?').join(', ')})`).join(', ')}
+       AS fresh ON DUPLICATE KEY UPDATE ${columns.filter((c) => c !== 'id').map((c) => `\`${c}\` = fresh.\`${c}\``).join(', ')}`,
+      { replacements: chunk.flatMap((r) => columns.map((c) => r[c])), transaction },
+    );
+  }
+}
+
+// Writes plain rows with one INSERT per 1,000 (no Sequelize objects: fast).
+async function insertRows(models, transaction, model, rows) {
+  if (rows.length === 0) return;
+  for (let i = 0; i < rows.length; i += 1000) {
+    await models[model].sequelize.getQueryInterface().bulkInsert(models[model].getTableName(), rows.slice(i, i + 1000), { transaction });
+  }
+}
+
+// The full rebuild of one customer: works out every lot and allocation from
+// their permanent records, compares with what's stored, and changes ONLY
+// what differs (a late event usually changes a few rows, not thousands):
+// rows that no longer exist are deleted (allocations before the lots they
+// point at), new rows inserted and changed rows updated IN PLACE.
+// Returns { changed, balanceMinor, oldestUnpaidAt }.
 async function rebuildFull(models, transaction, { businessId, customerId, timeZone }) {
   const result = rule.rebuild(businessId, await loadEvents(models, transaction, { businessId, customerId, timeZone }));
   const ids = { businessId, customerId };
-  for (const model of PROJECTION_MODELS) await models[model].destroy({ where: ids, transaction }); // allocations first (they point at lots)
-  if (result.debtLots.length) await models.DebtLot.bulkCreate(result.debtLots.map((l) => lotRow(ids, l, 'outstandingMinor')), { transaction });
-  if (result.creditLots.length) await models.CreditLot.bulkCreate(result.creditLots.map((l) => lotRow(ids, l, 'remainingMinor')), { transaction });
-  if (result.allocations.length) await models.DebtAllocation.bulkCreate(result.allocations.map((a) => allocationRow(ids, a)), { transaction });
+  const wanted = { DebtLot: result.debtLots, CreditLot: result.creditLots, DebtAllocation: result.allocations };
+  const plan = {};
+  for (const t of TABLES) {
+    const stored = new Map((await models[t.model].findAll({ where: ids, raw: true, transaction })).map((r) => [r.id, r]));
+    const rows = wanted[t.model].map((w) => t.toRow(ids, w));
+    const wantedIds = new Set(rows.map((r) => r.id));
+    plan[t.model] = {
+      remove: [...stored.keys()].filter((id) => !wantedIds.has(id)),
+      put: rows.filter((r) => !stored.has(r.id) || !sameRow(stored.get(r.id), r, t.amount)),
+    };
+  }
+  for (const model of PROJECTION_MODELS) { // allocations first: they point at lots
+    if (plan[model].remove.length) await models[model].destroy({ where: { ...ids, id: plan[model].remove }, transaction });
+  }
+  for (const model of ['DebtLot', 'CreditLot', 'DebtAllocation']) await putRows(models, transaction, model, plan[model].put);
   const changed = await updateCache(models, transaction, ids, result);
   return { changed, balanceMinor: result.balanceMinor, oldestUnpaidAt: result.oldestUnpaidAt };
 }
 
-// The highest order key already processed for this customer (or null).
-async function lastKey(models, transaction, ids) {
-  const keys = await Promise.all(['DebtLot', 'CreditLot', 'DebtAllocation'].map((m) => models[m].max('orderKey', { where: ids, transaction })));
-  return keys.filter(Boolean).sort().at(-1) ?? null;
+// The highest order key already processed for this customer (or null), in one query.
+async function lastKey(models, transaction, { businessId, customerId }) {
+  const [[row]] = await models.DebtLot.sequelize.query(
+    `SELECT GREATEST(
+       COALESCE((SELECT MAX(orderKey) FROM DebtLot WHERE businessId = :b AND customerId = :c), ''),
+       COALESCE((SELECT MAX(orderKey) FROM CreditLot WHERE businessId = :b AND customerId = :c), ''),
+       COALESCE((SELECT MAX(orderKey) FROM DebtAllocation WHERE businessId = :b AND customerId = :c), '')) AS k`,
+    { replacements: { b: businessId, c: customerId }, transaction },
+  );
+  return row.k || null;
 }
 
 // Applies one NEW event (its record already saved in this transaction). The
@@ -107,34 +168,25 @@ async function applyNewEvent(models, transaction, { businessId, customerId, time
   if (last !== null && rule.orderKeyOf(event) <= last) return rebuildFull(models, transaction, { businessId, customerId, timeZone });
 
   // The open lots are all the newest event can touch (closed ones add 0 to the balance).
-  const state = rule.emptyState(businessId);
-  const open = {
-    debt: await models.DebtLot.findAll({ where: { ...ids, outstandingMinor: { [Op.gt]: 0 } }, transaction }),
-    credit: await models.CreditLot.findAll({ where: { ...ids, remainingMinor: { [Op.gt]: 0 } }, transaction }),
-  };
-  const before = new Map();
-  for (const l of open.debt) {
-    const lot = { ...l.get({ plain: true }), originalMinor: num(l.originalMinor), outstandingMinor: num(l.outstandingMinor) };
-    state.debtLots.push(lot);
-    before.set(lot.id, lot.outstandingMinor);
-  }
-  for (const c of open.credit) {
-    const lot = { ...c.get({ plain: true }), originalMinor: num(c.originalMinor), remainingMinor: num(c.remainingMinor) };
-    state.creditLots.push(lot);
-    before.set(lot.id, lot.remainingMinor);
-  }
+  const toLot = (r, amount) => ({ ...r, originalMinor: num(r.originalMinor), [amount]: num(r[amount]) });
+  const openDebt = (await models.DebtLot.findAll({ where: { ...ids, outstandingMinor: { [Op.gt]: 0 } }, raw: true, transaction })).map((r) => toLot(r, 'outstandingMinor'));
+  const openCredit = (await models.CreditLot.findAll({ where: { ...ids, remainingMinor: { [Op.gt]: 0 } }, raw: true, transaction })).map((r) => toLot(r, 'remainingMinor'));
+  const state = rule.withLots(rule.emptyState(businessId), openDebt, openCredit);
+  const before = new Map([...openDebt.map((l) => [l.id, l.outstandingMinor]), ...openCredit.map((c) => [c.id, c.remainingMinor])]);
 
   rule.apply(state, event);
 
+  await insertRows(models, transaction, 'DebtLot', state.debtLots.filter((l) => !before.has(l.id)).map((l) => lotRow(ids, l, 'outstandingMinor')));
+  await insertRows(models, transaction, 'CreditLot', state.creditLots.filter((c) => !before.has(c.id)).map((c) => lotRow(ids, c, 'remainingMinor')));
   for (const l of state.debtLots) {
-    if (!before.has(l.id)) await models.DebtLot.create(lotRow(ids, l, 'outstandingMinor'), { transaction });
-    else if (before.get(l.id) !== l.outstandingMinor) await models.DebtLot.update({ outstandingMinor: l.outstandingMinor }, { where: { ...ids, id: l.id }, transaction });
+    if (!before.has(l.id)) continue;
+    if (before.get(l.id) !== l.outstandingMinor) await models.DebtLot.update({ outstandingMinor: l.outstandingMinor }, { where: { ...ids, id: l.id }, transaction });
   }
   for (const c of state.creditLots) {
-    if (!before.has(c.id)) await models.CreditLot.create(lotRow(ids, c, 'remainingMinor'), { transaction });
-    else if (before.get(c.id) !== c.remainingMinor) await models.CreditLot.update({ remainingMinor: c.remainingMinor }, { where: { ...ids, id: c.id }, transaction });
+    if (!before.has(c.id)) continue;
+    if (before.get(c.id) !== c.remainingMinor) await models.CreditLot.update({ remainingMinor: c.remainingMinor }, { where: { ...ids, id: c.id }, transaction });
   }
-  if (state.allocations.length) await models.DebtAllocation.bulkCreate(state.allocations.map((a) => allocationRow(ids, a)), { transaction });
+  await insertRows(models, transaction, 'DebtAllocation', state.allocations.map((a) => allocationRow(ids, a)));
 
   const totals = rule.summary(state);
   const changed = await updateCache(models, transaction, ids, totals);

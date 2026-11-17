@@ -11,6 +11,8 @@
 //       prints the JSON body for POST /api/devices (type your password into it)
 //   npm run dev:sign -- headers --method GET --path /api/team --business <id> [--body '<json>'] [--server-time <ms>]
 //       prints the four signing headers (and the exact body to send)
+//   npm run dev:sign -- headers --method PUT --path /api/photos/<photoId> --business <id> --body-file tests/fixtures/photos/canvas.webp
+//       the same for a photo upload (BE6.5): the signature covers the file's exact bytes
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -78,9 +80,11 @@ async function main([command, ...rest]) {
     for (const required of ['method', 'path', 'business']) if (!opts[required]) throw new Error(`Give --${required}.`);
     const key = await loadKey();
     const bodyText = typeof opts.body === 'string' ? opts.body : '';
+    // --body-file: a photo (BE6.5); its raw bytes are hashed instead of JSON text.
+    const bodyBytes = typeof opts['body-file'] === 'string' ? fs.readFileSync(opts['body-file']) : Buffer.from(bodyText, 'utf8');
     const signedAt = String(opts['server-time'] ? Number(opts['server-time']) : Date.now());
     const nonce = randomBytes(16).toString('base64url');
-    const bodyHash = createHash('sha256').update(Buffer.from(bodyText, 'utf8')).digest('hex');
+    const bodyHash = createHash('sha256').update(bodyBytes).digest('hex');
     const text = [opts.method.toUpperCase(), opts.path, bodyHash, key.deviceId, opts.business.toLowerCase(), signedAt, nonce].join('\n');
     console.log(`X-Business: ${opts.business.toLowerCase()}`);
     console.log(`X-Device-Id: ${key.deviceId}`);
@@ -88,11 +92,12 @@ async function main([command, ...rest]) {
     console.log(`X-Nonce: ${nonce}`);
     console.log(`X-Signature: ${await sign(key.privateKey, text)}`);
     if (bodyText) console.log(`\nSend exactly this body (raw, application/json):\n${bodyText}`);
+    if (opts['body-file']) console.log(`\nSend exactly this file as the body (Postman: Body → binary), with Content-Type image/webp or image/jpeg: ${opts['body-file']}`);
     console.log('\nEach set of headers works once (the nonce) and for 5 minutes.');
     return;
   }
 
-  throw new Error('Commands: new-key | register-body --challenge <c> | headers --method <M> --path <p> --business <id> [--body <json>]');
+  throw new Error('Commands: new-key | register-body --challenge <c> | headers --method <M> --path <p> --business <id> [--body <json> | --body-file <path>]');
 }
 
 main(process.argv.slice(2)).catch((err) => {

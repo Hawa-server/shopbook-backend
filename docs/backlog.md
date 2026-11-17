@@ -1,5 +1,7 @@
 # Shop Book (working name): Backlog
 
+> **Name:** the product's name is **Tabova** (chosen 11 Nov 2026). "Shop Book" in these documents is the working name; internal names (`shopbook-<id>` databases, `STOREBOK_` folders) don't change.
+
 The full product backlog for Shop Book, a bookkeeping app for market traders: products and stock, sales, payments, debts, and a team that works offline and syncs. **Part 1** lists the user stories. In **Part 2**, each user story group becomes an **epic** and goes through four steps:
 
 **How the documents fit together:** this backlog says **what** to build and why; `docs/server-plan.md` and `docs/app-plan.md` say **how**; Claude Code works in two separate projects, each with its own `CLAUDE.md`: the backend (`STOREBOK_BACKEND`) and the frontend (`STOREBOK_FRONTEND`); this backlog is the same file in both. If they disagree, this backlog wins and the plan is corrected.
@@ -47,6 +49,7 @@ Each story below will go through the four planning steps (acceptance criteria, s
 6. **Cost price is private.** As a shop owner, I want only me to see cost prices and profit, so that my staff see selling prices but not my margins.
 7. **Find a product fast.** As a seller, I want to search products by typing part of the name, so that I can find one among many in seconds.
 8. **Edit and hide products.** As a shop owner, I want to change a product's details or prices, or hide one I no longer sell, so that the list stays correct without losing past sales.
+9. **Product photos** (added 11 Nov 2026). As an owner or manager, I want to add a photo to a product, so that sellers can recognise it quickly in the product list and at the till.
 
 ### Epic 2: Stock
 
@@ -440,6 +443,15 @@ From Part 1, Epic 1.
 - **AC32: Offline edits.** Given the owner adds or edits products while offline, then the changes are saved on the phone and sent automatically when there's data, and other phones receive them on their next sync.
 - **AC33: Two languages.** Given my language is Twi, then product screens, buttons, units, size names, warnings, and messages are in Twi; product names stay exactly as typed.
 
+### Product photos (added 11 Nov 2026)
+
+- **AC35: One photo per product.** An owner or manager can take or choose one photo per product, and can replace or remove it. Sales associates see photos but can't change them.
+- **AC36: Small and private photos.** The phone shrinks the photo to about 600 px and re-saves it before upload, removing location and camera details; a photo is about 50–80 KB.
+- **AC37: Photos offline.** Adding a photo works offline: the product saves at once, the photo uploads in the background when there's internet and keeps retrying, and everyone sees a placeholder until it arrives. A photo problem never stops a product or a sale from syncing.
+- **AC38: Allowed photos.** Only JPEG or WebP photos up to 300 KB are accepted; anything else is refused with a clear message.
+- **AC39: Photos stay in the business.** A business's photos are private: only its own members can see them, and no one else can view or replace them.
+- **AC40: Photos aren't permanent records.** Replacing a photo is allowed, and old photos no product uses any more are cleaned up by the agreed rule (unused for 30 days). Closing a business or resetting the practice shop deletes its photos too.
+
 ## Step 2: Stories and points
 
 ### Story 1.1: Add a product (name, type, unit, starting stock)
@@ -528,7 +540,13 @@ As a shop owner, I want every sale checked against the price the seller's phone 
 
 **Acceptance:** every accepted product or size change keeps its prices and cost as a numbered version; a sale line names the version it used; the server checks the price against that version and sets the cost itself; a sale at an older price is saved and flagged "Older price used"; a phone can never send its own cost. **Technical notes:** `PriceVersion` (server plan, "Sale prices, older versions and cost", ADR-23).
 
-**Epic 1 total:** 12 stories, **40 points** (Must have: 37; Should have: 3).
+### Story 1.11: Product photos (added 11 Nov 2026)
+
+**Points:** 3 | **Priority:** Should have | **Dependencies:** 1.1, 1.9 | **Covers:** AC35–AC40
+
+As an owner or manager, I want to add a photo to a product, so that sellers can recognise it quickly in the product list and at the till.
+
+**Epic 1 total:** 13 stories, **43 points** (Must have: 37; Should have: 6).
 
 ## Step 3: Product owner decisions
 

@@ -17,6 +17,8 @@ const { resetDatabase, dbApp, signUpOwner, signInAgent, signupBody } = require('
 const XHR = { 'X-Requested-With': 'XMLHttpRequest' };
 const biz = (businessId) => ({ ...XHR, 'X-Business': businessId });
 const RANDOM_ID = '7f1e2d3c-4b5a-4968-8776-655443322110';
+const PHOTO = require('node:fs').readFileSync(require('node:path').join(__dirname, '../fixtures/photos/canvas.jpg'));
+const OTHER_PHOTO = require('node:fs').readFileSync(require('node:path').join(__dirname, '../fixtures/photos/canvas.webp'));
 
 let ctx;
 let A;
@@ -64,6 +66,20 @@ async function buildBusiness(label) {
       } },
     ],
   });
+  // BE6.5: a photo, used by the product.
+  const photoId = randomUUID();
+  await agent.put(`/api/photos/${photoId}`).set({ ...biz(businessId), 'Content-Type': 'image/jpeg' }).send(PHOTO);
+  await agent.post('/api/sync/push').set(biz(businessId)).send({
+    deviceId: ownerDevice.deviceId,
+    operations: [{ opId: randomUUID(), type: 'product.upsert', payload: { productId, baseVersion: 1, fields: { photoId } } }],
+  });
+  const repaymentId = randomUUID();
+  await agent.post('/api/sync/push').set(biz(businessId)).send({
+    deviceId: ownerDevice.deviceId,
+    operations: [{ opId: randomUUID(), type: 'repayment.create', payload: {
+      repaymentId, receiptNumber: `${ownerDevice.deviceCode}-0002`, customerId, amountMinor: 2000, method: 'cash', recordedAt: new Date().toISOString(),
+    } }],
+  });
 
   return {
     label, agent, businessId, ownerId: res.body.user.id, ownerPhone: body.phone, ownerPassword: body.password,
@@ -71,7 +87,7 @@ async function buildBusiness(label) {
     invitedId: invited.body.member.membershipId, invitee,
     removedId: removed.body.member.membershipId,
     memberIds: [staff.body.member.membershipId, invited.body.member.membershipId, removed.body.member.membershipId],
-    deviceId: ownerDevice.deviceId, deviceCode: ownerDevice.deviceCode, productId, sizeId, locationId, movementId, customerId, saleId,
+    deviceId: ownerDevice.deviceId, deviceCode: ownerDevice.deviceCode, productId, sizeId, locationId, movementId, customerId, saleId, repaymentId, photoId,
   };
 }
 
@@ -169,6 +185,51 @@ const CASES = {
     expect(saleTries.body.results.map((r) => r.error.code)).toEqual(['NOT_FOUND', 'NOT_FOUND', 'NOT_FOUND', 'ID_TAKEN']);
     expect((await Customer.findByPk(B.customerId)).balanceMinor).toBe(bBalance);
     expect(await Sale.count({ where: { businessId: B.businessId } })).toBe(1);
+
+    // Debts naming B's customer or reversing B's repayment: answered like unknown ones; B's balance untouched.
+    const debtBalance = (await Customer.findByPk(B.customerId)).balanceMinor;
+    const debtTries = await A.agent.post('/api/sync/push').set(biz(A.businessId)).send({
+      deviceId: A.deviceId,
+      operations: [
+        { opId: randomUUID(), type: 'repayment.create', payload: { repaymentId: randomUUID(), receiptNumber: `${A.deviceCode}-777001`, customerId: B.customerId, amountMinor: 100, method: 'cash', recordedAt: now } },
+        { opId: randomUUID(), type: 'repayment.create', payload: { repaymentId: randomUUID(), receiptNumber: `${A.deviceCode}-777002`, customerId: A.customerId, correctsRepaymentId: B.repaymentId, correctionReason: 'x', recordedAt: now } },
+        { opId: randomUUID(), type: 'repayment.create', payload: { repaymentId: randomUUID(), receiptNumber: `${A.deviceCode}-777003`, customerId: B.customerId, correctsRepaymentId: B.repaymentId, correctionReason: 'x', recordedAt: now } },
+        { opId: randomUUID(), type: 'debtWriteOff.create', payload: { writeOffId: randomUUID(), customerId: B.customerId, amountMinor: 100, reason: 'moved', recordedAt: now } },
+        { opId: randomUUID(), type: 'openingDebt.create', payload: { openingDebtId: randomUUID(), customerId: B.customerId, amountMinor: 100, owedSince: '2026-01-01', recordedAt: now } },
+        { opId: randomUUID(), type: 'customer.upsert', payload: { customerId: B.customerId, baseVersion: 1, fields: { name: 'Taken over' } } },
+      ],
+    });
+    expect(debtTries.body.results.map((r) => r.error.code)).toEqual(['NOT_FOUND', 'NOT_FOUND', 'NOT_FOUND', 'NOT_FOUND', 'NOT_FOUND', 'NOT_FOUND']);
+    expect((await Customer.findByPk(B.customerId)).balanceMinor).toBe(debtBalance);
+    expect((await Customer.findByPk(B.customerId)).name).toBe('Customer B');
+  },
+  'GET /api/customers/:customerId/history': async () => {
+    await expectSameAsUnknown('GET', (id) => `/api/customers/${id}/history`, undefined, B.customerId);
+    const own = await A.agent.get(`/api/customers/${A.customerId}/history`).set(biz(A.businessId));
+    expect(own.status).toBe(200);
+    expect(JSON.stringify(own.body)).not.toContain(B.saleId);
+  },
+  'GET /api/photos/:photoId': async () => {
+    await expectSameAsUnknown('GET', (id) => `/api/photos/${id}`, undefined, B.photoId);
+    const own = await A.agent.get(`/api/photos/${A.photoId}`).set(biz(A.businessId));
+    expect(own.status).toBe(200);
+  },
+  'PUT /api/photos/:photoId': async () => {
+    // A uploading with B's photoId: refused like any used photo ID (it says
+    // nothing about B), and B's photo (row and file) is untouched.
+    const bRow = await db.getModels().Photo.findByPk(B.photoId, { raw: true });
+    const storage = ctx.deps.photoStorage;
+    const bFile = storage.objects.get(bRow.storageKey).bytes;
+    for (const bytes of [PHOTO, OTHER_PHOTO]) {
+      const res = await A.agent.put(`/api/photos/${B.photoId}`).set({ ...biz(A.businessId), 'Content-Type': 'image/jpeg' }).send(bytes);
+      expect([res.status, res.body.error.code]).toEqual([409, 'PHOTO_ID_TAKEN']);
+    }
+    expect(await db.getModels().Photo.findByPk(B.photoId, { raw: true })).toEqual(bRow);
+    expect(Buffer.compare(storage.objects.get(bRow.storageKey).bytes, bFile)).toBe(0);
+    expect([...storage.objects.keys()].filter((key) => key.startsWith(`${A.businessId}/${B.photoId}`))).toEqual([]);
+    // B still gets its own photo, A still can't.
+    expect((await B.agent.get(`/api/photos/${B.photoId}`).set(biz(B.businessId))).status).toBe(200);
+    expect((await A.agent.get(`/api/photos/${B.photoId}`).set(biz(A.businessId))).status).toBe(404);
   },
   'GET /api/products/:productId/history': async () => {
     await expectSameAsUnknown('GET', (id) => `/api/products/${id}/history`, undefined, B.productId);
@@ -180,7 +241,7 @@ const CASES = {
     const res = await A.agent.get('/api/sync/pull?since=0').set(biz(A.businessId));
     expect(res.status).toBe(200);
     const text = JSON.stringify(res.body);
-    for (const leak of [B.businessId, B.ownerId, B.deviceId, B.productId, B.sizeId, B.locationId, B.movementId, B.customerId, B.saleId, 'Customer B', 'Shop B', 'Owner B', 'Staff B', 'Sandal B', ...B.memberIds]) expect(text).not.toContain(leak);
+    for (const leak of [B.businessId, B.ownerId, B.deviceId, B.productId, B.sizeId, B.locationId, B.movementId, B.customerId, B.saleId, B.repaymentId, B.photoId, 'Customer B', 'Shop B', 'Owner B', 'Staff B', 'Sandal B', ...B.memberIds]) expect(text).not.toContain(leak);
   },
   'POST /api/devices/challenge': async () => {
     const before = await db.getModels().DeviceChallenge.count({ where: { businessId: B.businessId } });
@@ -252,7 +313,7 @@ describe("A's people against B's records", () => {
 
   test("X-Business set to B gives the same 404 as a random business, on every business route", async () => {
     for (const route of routes.filter((r) => r.business)) {
-      const url = route.path.replace(':membershipId', B.staffId).replace(':deviceId', B.deviceId).replace(':productId', B.productId);
+      const url = route.path.replace(':membershipId', B.staffId).replace(':deviceId', B.deviceId).replace(':productId', B.productId).replace(':customerId', B.customerId);
       const body = route.method === 'GET' || route.method === 'DELETE' ? undefined : { name: 'X', phone: '0201112233', role: 'manager' };
       const withB = await call(A.agent, route.method, url, biz(B.businessId), body);
       const withRandom = await call(A.agent, route.method, url, biz(randomUUID()), body);

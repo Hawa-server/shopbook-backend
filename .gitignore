@@ -20,3 +20,6 @@ node_modules/
 coverage/
 *.log
 .DS_Store
+
+# Development photo files (PHOTO_STORAGE=disk, BE6.5)
+/.photos/

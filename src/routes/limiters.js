@@ -40,6 +40,8 @@ function createAuthLimiters({ now, unlimited = false } = {}) {
     deviceSignatureFailures: make('device-signature-failures', 15 * MINUTE, 20),
     // Sync (push and pull together): 120 per 15 minutes per person.
     syncByUser: make('sync-user', 15 * MINUTE, 120),
+    // Product photo uploads (BE6.5): 60 per hour per person.
+    photoUploadByUser: make('photo-upload-user', HOUR, 60),
   };
 }
 

@@ -8,6 +8,7 @@ const cookieParser = require('cookie-parser');
 const { routes: defaultRoutes } = require('./routes');
 const { createAuthLimiters } = require('./routes/limiters');
 const { createEmailSender } = require('./lib/email');
+const { createPhotoStorage } = require('./lib/photoStorage');
 const { createBackgroundRunner } = require('./lib/background');
 const db = require('./db');
 const { requestId } = require('./middleware/requestId');
@@ -27,7 +28,7 @@ function keepRawBody(req, res, buf) {
 // Makes the app. `config` comes from parseEnv; `checkDatabase` and `logger`
 // are passed in so tests can replace them; `routes` defaults to the registry.
 // The rest are the routes' shared helpers, each replaceable in tests: the
-// email sender, the rate limiters, background work, the database (models and
+// email sender, the photo storage (BE6.5), the rate limiters, background work, the database (models and
 // runTransaction) and the clock (`now`, milliseconds).
 function createApp({
   config,
@@ -35,6 +36,7 @@ function createApp({
   logger,
   routes = defaultRoutes,
   email = createEmailSender({ config, logger }),
+  photoStorage = createPhotoStorage(config),
   limiters = createAuthLimiters(),
   background = createBackgroundRunner({ logger }),
   getModels = db.getModels,
@@ -69,7 +71,7 @@ function createApp({
   app.use(cookieParser()); // reads the session cookie (src/lib/session.js)
   app.use(csrfProtection(config));
 
-  const deps = { config, checkDatabase, logger, email, limiters, background, getModels, runTransaction, now, operations };
+  const deps = { config, checkDatabase, logger, email, photoStorage, limiters, background, getModels, runTransaction, now, operations };
   for (const route of routes) {
     app[route.method.toLowerCase()](route.path, ...route.build(deps));
   }
@@ -77,7 +79,7 @@ function createApp({
   app.use(notFound);
   app.use(errorHandler({ logger }));
 
-  app.locals.deps = deps; // lets tests reach the email outbox, limiters and background work
+  app.locals.deps = deps; // lets tests reach the email outbox, photo storage, limiters and background work
   return app;
 }
 

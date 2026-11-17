@@ -17,6 +17,13 @@
 // - Duplicate names are WARNINGS, never rejections (decided 8 Nov 2026): two
 //   phones adding "Black sandal" offline may each have sold it already, and
 //   rejecting one would send its sales to "Needs attention".
+// - Photos (BE6.5): `photoId` names the product's photo, uploaded separately
+//   (PUT /api/photos/:photoId) and possibly NOT YET ARRIVED (the phone was
+//   offline): any well-formed ID is accepted, so a product (and its sales)
+//   is never refused over a photo. A photo change is an ordinary edit (new
+//   version, and a PriceVersion row with the unchanged prices, so a sale made
+//   after it still finds its version). The photo let go of gets releasedAt =
+//   now (the 30-day clean-up clock); the new one has it cleared.
 // - Only the fields listed in the schemas can change (an allow-list); a
 //   payload is never written straight to the database.
 
@@ -53,6 +60,7 @@ const productFields = z.object({
   lowStockLevelUnits: z.number().int().min(0).max(1e7).nullable(), // BE7: this product's own low-stock level, in units (null = the business's)
   lowStockWarnings: z.boolean(), // BE7: false = no low-stock warnings for this product
   isHidden: z.boolean(),
+  photoId: id().nullable(), // BE6.5: the product's photo (null = no photo); may not be uploaded yet
 }).partial().strict().refine((f) => Object.keys(f).length > 0, { message: 'Give at least one field.' });
 
 const sizeFields = z.object({
@@ -82,7 +90,7 @@ const num = (v) => (v === null || v === undefined ? null : Number(v));
 
 // The fields of a product or size that history records (cost included:
 // ChangeLog is server-only, and the history endpoint removes cost for managers).
-const PRODUCT_KEYS = ['name', 'type', 'unit', 'unitLabel', 'retailMinor', 'wholesaleMinor', 'costMinor', 'lowStockLevelUnits', 'lowStockWarnings', 'isHidden'];
+const PRODUCT_KEYS = ['name', 'type', 'unit', 'unitLabel', 'retailMinor', 'wholesaleMinor', 'costMinor', 'lowStockLevelUnits', 'lowStockWarnings', 'isHidden', 'photoId'];
 const SIZE_KEYS = ['label', 'sortOrder', 'retailMinor', 'wholesaleMinor', 'costMinor', 'isActive'];
 const MONEY_KEYS = ['retailMinor', 'wholesaleMinor', 'costMinor'];
 function snapshot(row, keys) {
@@ -164,6 +172,17 @@ function recordHistory(ctx, { entity, entityId, before, after, conflict }) {
   }, { transaction: ctx.transaction });
 }
 
+// Keeps the photo clean-up clock right when a product's photo changes: the
+// photo let go of is "unused since now" (if no other product uses it, the
+// clean-up waits 30 days from now), the one taken is in use again. Photos
+// not uploaded yet simply have no row to update. Photo is not a permanent
+// record, so this update is allowed.
+async function notePhotoChange(ctx, before, after) {
+  if (before === after) return;
+  if (before) await ctx.s.Photo.update({ releasedAt: ctx.now }, { where: { id: before }, transaction: ctx.transaction });
+  if (after) await ctx.s.Photo.update({ releasedAt: null }, { where: { id: after }, transaction: ctx.transaction });
+}
+
 // product.upsert: creates or edits a product (owner and manager).
 async function productHandler(ctx, { productId, baseVersion, fields }) {
   const isOwner = ctx.membership.role === 'owner';
@@ -185,7 +204,7 @@ async function productHandler(ctx, { productId, baseVersion, fields }) {
       ...unitOf(ctx, fields),
       retailMinor: fields.retailMinor, wholesaleMinor: fields.wholesaleMinor ?? null, costMinor: isOwner ? fields.costMinor : null,
       lowStockLevelUnits: fields.lowStockLevelUnits ?? null, lowStockWarnings: fields.lowStockWarnings ?? true,
-      isHidden: fields.isHidden ?? false, version, createdBy: ctx.user.id, updatedBy: ctx.user.id,
+      isHidden: fields.isHidden ?? false, photoId: fields.photoId ?? null, version, createdBy: ctx.user.id, updatedBy: ctx.user.id,
     };
     await insertNew(ctx, 'Product', row);
     await recordHistory(ctx, { entity: 'product', entityId: productId, before: null, after: { ...snapshot(row, PRODUCT_KEYS), version }, conflict: false });
@@ -220,6 +239,7 @@ async function productHandler(ctx, { productId, baseVersion, fields }) {
     });
   }
 
+  if ('photoId' in fields) await notePhotoChange(ctx, existing?.photoId ?? null, row.photoId ?? null);
   const prices = { retailMinor: num(row.retailMinor), wholesaleMinor: num(row.wholesaleMinor), costMinor: num(row.costMinor) };
   await recordPriceVersion(ctx, { productId, version, prices });
   ctx.stamp('Product', { id: productId });

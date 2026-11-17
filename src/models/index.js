@@ -214,6 +214,7 @@ function defineModels(sequelize) {
     lowStockLevelUnits: { type: DataTypes.INTEGER, allowNull: true }, // BE7: this product's own low-stock level (null = the business's)
     lowStockWarnings: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true }, // BE7: false = no low-stock warnings for it
     isHidden: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+    photoId: ref(true), // BE6.5: the current photo; no foreign key (it may not have been uploaded yet)
     version: { type: DataTypes.INTEGER.UNSIGNED, allowNull: false, defaultValue: 1 },
     createdBy: ref(),
     updatedBy: ref(true),
@@ -221,6 +222,23 @@ function defineModels(sequelize) {
     createdAt: time(false),
     updatedAt: time(false),
   }, common);
+
+  // A product photo (BE6.5). NOT a permanent record: the image is in object
+  // storage (storageKey), and an unused photo is cleaned up 30 days after
+  // releasedAt (or uploadedAt) by the approved housekeeping rule.
+  const Photo = sequelize.define('Photo', {
+    id,
+    businessId: ref(),
+    contentType: { type: DataTypes.ENUM('image/jpeg', 'image/webp'), allowNull: false },
+    byteSize: { type: DataTypes.INTEGER.UNSIGNED, allowNull: false },
+    width: { type: DataTypes.SMALLINT.UNSIGNED, allowNull: false },
+    height: { type: DataTypes.SMALLINT.UNSIGNED, allowNull: false },
+    sha256: { type: DataTypes.CHAR(64), allowNull: false },
+    storageKey: { type: DataTypes.STRING(160), allowNull: false },
+    uploadedBy: ref(),
+    uploadedAt: time(false),
+    releasedAt: time(),
+  }, { freezeTableName: true, timestamps: false });
 
   // A product's size. NULL prices mean "use the product's".
   const ProductSize = sequelize.define('ProductSize', {
@@ -467,7 +485,7 @@ function defineModels(sequelize) {
   return {
     User, Business, BusinessSettings, Location, Membership, EmailToken, ChangeLog,
     Device, DeviceRequestNonce, DeviceChallenge, SyncSequence, ProcessedOperation, ReceiptNumber,
-    Product, ProductSize, PriceVersion, StockMovement, StockCount, Customer, Sale, SaleItem, SalePayment,
+    Product, Photo, ProductSize, PriceVersion, StockMovement, StockCount, Customer, Sale, SaleItem, SalePayment,
     Repayment, DebtWriteOff, OpeningDebt, DebtLot, CreditLot, DebtAllocation,
   };
 }
@@ -475,7 +493,7 @@ function defineModels(sequelize) {
 // The models holding ONE business's data (they have a businessId column).
 // Route handlers reach them only through scoped() (src/services/scoped.js);
 // a test fails the build otherwise. Every later business table joins this list.
-const BUSINESS_MODELS = ['BusinessSettings', 'Location', 'Membership', 'ChangeLog', 'Device', 'DeviceRequestNonce', 'DeviceChallenge', 'ProcessedOperation', 'ReceiptNumber', 'Product', 'ProductSize', 'PriceVersion', 'StockMovement', 'StockCount', 'Customer', 'Sale', 'SaleItem', 'SalePayment',
+const BUSINESS_MODELS = ['BusinessSettings', 'Location', 'Membership', 'ChangeLog', 'Device', 'DeviceRequestNonce', 'DeviceChallenge', 'ProcessedOperation', 'ReceiptNumber', 'Product', 'Photo', 'ProductSize', 'PriceVersion', 'StockMovement', 'StockCount', 'Customer', 'Sale', 'SaleItem', 'SalePayment',
   'Repayment', 'DebtWriteOff', 'OpeningDebt', 'DebtLot', 'CreditLot', 'DebtAllocation'];
 
 // The tables phones pull (each row has a serverSeq), and the pull row type of each.
