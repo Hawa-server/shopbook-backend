@@ -12,6 +12,7 @@
 
 const { AppError } = require('../lib/errors');
 const { allowedOrigins } = require('./allowedOrigins');
+const { PRODUCT_NAME } = require('../brand');
 
 const STATE_CHANGING = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
@@ -47,7 +48,7 @@ function requireOrigin(config) {
     const origin = req.get('Origin');
     if (origin === undefined) {
       if (config.isDevelopment) return next();
-      return next(new AppError(403, 'ORIGIN_REQUIRED', 'This request must come from the Shop Book app.'));
+      return next(new AppError(403, 'ORIGIN_REQUIRED', `This request must come from the ${PRODUCT_NAME} app.`));
     }
     if (!origins.has(origin)) {
       return next(new AppError(403, 'ORIGIN_NOT_ALLOWED', 'This request came from a website that is not allowed.'));

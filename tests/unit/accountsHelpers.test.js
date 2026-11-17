@@ -75,7 +75,7 @@ describe('email adapter', () => {
   function productionConfig() {
     return testConfig({
       NODE_ENV: 'production', DB_SSL_CA_PATH: __filename, TRUST_PROXY: '3', JWT_SECRET: 'x'.repeat(40),
-      APP_URL: 'https://app.example.test', EMAIL_API_KEY: 'brevo-key-for-test', EMAIL_FROM_ADDRESS: 'shop@example.test', EMAIL_FROM_NAME: 'Shop Book',
+      APP_URL: 'https://app.example.test', EMAIL_API_KEY: 'brevo-key-for-test', EMAIL_FROM_ADDRESS: 'shop@example.test', EMAIL_FROM_NAME: 'Shop Book', R2_ACCOUNT_ID: '0123456789abcdef0123456789abcdef', R2_ACCESS_KEY_ID: 'k', R2_SECRET_ACCESS_KEY: 's', R2_BUCKET: 'tabova-photos-test',
     });
   }
 

@@ -21,7 +21,7 @@ const { Op } = require('sequelize');
 const { SYNCED_MODELS } = require('../models');
 const { scoped } = require('../services/scoped');
 const { readWatermark } = require('./runOperation');
-const { saleView } = require('../services/saleView');
+const { saleView, flagsFor } = require('../services/saleView');
 
 const MAX_LIMIT = 500;
 
@@ -36,11 +36,18 @@ const VISIBLE_TO = {
   stockMovement: ['owner', 'manager', 'associate'],
   stockCount: ['owner', 'manager', 'associate'],
   customer: ['owner', 'manager', 'associate'],
-  sale: ['owner', 'manager', 'associate'], // associates: their OWN sales only (ONLY_OWN below)
+  sale: ['owner', 'manager', 'associate'], // associates: their OWN sales only (FOR_ASSOCIATES below)
+  repayment: ['owner', 'manager', 'associate'], // associates: their own, never a reversal
+  debtWriteOff: ['owner', 'manager'],
+  openingDebt: ['owner', 'manager'],
 };
 
-// Row types an associate receives only when they recorded them.
-const ONLY_OWN = { sale: 'recordedBy' };
+// What an associate receives of a row type that isn't all theirs to see
+// ("Who sees what"): only what they recorded themselves, and no reversals.
+const FOR_ASSOCIATES = {
+  sale: (userId) => ({ recordedBy: userId }),
+  repayment: (userId) => ({ recordedBy: userId, correctsRepaymentId: null }),
+};
 
 // BIGINT money columns can come back as strings: always send numbers (or null).
 const num = (v) => (v === null || v === undefined ? null : Number(v));
@@ -76,7 +83,7 @@ const VIEWS = {
     id: r.id, name: r.name, type: r.type, unit: r.unit, unitLabel: r.unitLabel ?? null, unitScale: r.unitScale,
     retailMinor: num(r.retailMinor), wholesaleMinor: num(r.wholesaleMinor), ...costFor(role, r),
     lowStockLevelUnits: r.lowStockLevelUnits ?? null, lowStockWarnings: r.lowStockWarnings,
-    isHidden: r.isHidden, version: r.version, updatedBy: r.updatedBy ?? null, updatedAt: r.updatedAt,
+    isHidden: r.isHidden, photoId: r.photoId ?? null, version: r.version, updatedBy: r.updatedBy ?? null, updatedAt: r.updatedAt,
   }),
   size: (r, role) => ({
     id: r.id, productId: r.productId, label: r.label, sortOrder: r.sortOrder,
@@ -109,6 +116,23 @@ const VIEWS = {
   // A sale with its lines and payments inside (one row, never split across
   // pages); cost and some flags by role (src/services/saleView.js).
   sale: (r, role) => saleView(r, role),
+  // Debts (BE9). A reversal has corrects…Id and correctionReason; the
+  // original stays as it was (show "Corrected"/"Reversed" under it).
+  repayment: (r, role) => ({
+    id: r.id, customerId: r.customerId, deviceId: r.deviceId, receiptNumber: r.receiptNumber, amountMinor: num(r.amountMinor), method: r.method,
+    note: r.note ?? null, correctsRepaymentId: r.correctsRepaymentId ?? null, correctionReason: r.correctionReason ?? null,
+    flags: flagsFor(role, r.flags), recordedBy: r.recordedBy, recordedAt: r.recordedAt, receivedAt: r.receivedAt,
+  }),
+  debtWriteOff: (r) => ({
+    id: r.id, customerId: r.customerId, amountMinor: num(r.amountMinor), reason: r.reason, note: r.note ?? null,
+    correctsDebtWriteOffId: r.correctsDebtWriteOffId ?? null, correctionReason: r.correctionReason ?? null,
+    recordedBy: r.recordedBy, recordedAt: r.recordedAt, receivedAt: r.receivedAt,
+  }),
+  openingDebt: (r) => ({
+    id: r.id, customerId: r.customerId, amountMinor: num(r.amountMinor), owedSince: r.owedSince, note: r.note ?? null,
+    correctsOpeningDebtId: r.correctsOpeningDebtId ?? null, correctionReason: r.correctionReason ?? null,
+    recordedBy: r.recordedBy, recordedAt: r.recordedAt, receivedAt: r.receivedAt,
+  }),
 };
 
 // Extra reading options per model (the sale's lines and payments come with it).
@@ -131,7 +155,7 @@ async function pullPage(deps, req, { since, limit }) {
     for (const [modelName, type] of Object.entries(SYNCED_MODELS)) {
       if (!VISIBLE_TO[type].includes(role)) continue;
       const where = { serverSeq: { [Op.gt]: since, [Op.lte]: upper } };
-      if (role === 'associate' && ONLY_OWN[type]) where[ONLY_OWN[type]] = req.user.id;
+      if (role === 'associate' && FOR_ASSOCIATES[type]) Object.assign(where, FOR_ASSOCIATES[type](req.user.id));
       const found = await s[modelName].findAll({ where, include: includeFor(models, modelName) });
       for (const r of found) rows.push({ type, serverSeq: Number(r.serverSeq), data: VIEWS[type](r, role) });
     }

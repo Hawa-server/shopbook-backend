@@ -9,7 +9,9 @@
 // - the shell's own environment is NOT passed on (only PATH and HOME), so a
 //   DB_HOST left exported in the terminal can't redirect it to another database;
 // - the file must say NODE_ENV=production and pass the full environment check
-//   (SSL certificate, TRUST_PROXY…), so a copied development file is refused;
+//   (SSL certificate, TRUST_PROXY…), so a copied development file is refused.
+//   The ONE check left out is photo storage (the R2 values, BE6.5): migrations
+//   never touch photos, so the production R2 secret can stay in Render only;
 // - before anything runs, it prints the host and database it's about to use.
 
 const fs = require('node:fs');
@@ -37,7 +39,7 @@ function loadProductionEnv(envFile) {
     throw new Refused(`${path.basename(envFile)} must contain NODE_ENV=production. Nothing was run.`);
   }
   try {
-    parseEnv(vars);
+    parseEnv(vars, { skipPhotoStorage: true });
   } catch (err) {
     if (err instanceof EnvError) throw new Refused(`${err.message}\nNothing was run.`);
     throw err;

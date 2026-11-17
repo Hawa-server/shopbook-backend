@@ -369,6 +369,60 @@ describe('sales (BE8)', () => {
   });
 });
 
+describe('debts (BE9)', () => {
+  let locationId;
+  let productId;
+  let n = 0;
+  // A customer and the product sold to them on credit (made once).
+  async function setUp() {
+    locationId ??= (await models().Location.findOne({ where: { businessId: business } })).id;
+    if (!productId) {
+      productId = randomUUID();
+      await owner.push(business, [op('product.upsert', { productId, baseVersion: null, fields: { name: 'Debt torture sandal', type: 'other', unit: 'pair', retailMinor: 10000, costMinor: 5000 } })]);
+    }
+    const customerId = randomUUID();
+    await owner.push(business, [op('customer.upsert', { customerId, baseVersion: null, fields: { name: 'Torture customer' } })]);
+    return customerId;
+  }
+  const code = (phone) => phone.devices.get(business).deviceCode;
+  const receipt = (phone) => { n += 1; return `${code(phone)}-${700000 + n}`; };
+  const creditSale = (phone, customerId, recordedAt) => op('sale.create', {
+    saleId: randomUUID(), receiptNumber: receipt(phone), locationId, customerId, priceType: 'retail',
+    items: [{ itemId: randomUUID(), productId, sizeId: null, quantityUnits: 1, productVersion: 1, setPriceMinor: 10000, agreedPriceMinor: 10000, lineTotalMinor: 10000 }],
+    payments: [], subtotalMinor: 10000, paidMinor: 0, creditMinor: 10000, recordedAt,
+  });
+  const repay = (phone, customerId, amountMinor, recordedAt) => op('repayment.create', {
+    repaymentId: randomUUID(), receiptNumber: receipt(phone), customerId, amountMinor, method: 'cash', recordedAt,
+  });
+
+  test('two phones take repayments that together are more than owed, at the same moment: both saved, the customer in credit, one flagged overpaid', async () => {
+    const customerId = await setUp();
+    await owner.push(business, [creditSale(owner, customerId, new Date().toISOString())]);
+    const { phone: manager } = await staffPhone(owner, business, 'manager');
+    const now = new Date().toISOString();
+    const [a, b] = await Promise.all([owner.push(business, [repay(owner, customerId, 7000, now)]), manager.push(business, [repay(manager, customerId, 7000, now)])]);
+    const results = [a, b].map((r) => r.body.results[0]);
+    expect(results.map((r) => r.status)).toEqual(['saved', 'saved']);
+    expect(results.filter((r) => r.result.flags.overpaid)).toHaveLength(1);
+    expect(Number((await models().Customer.findByPk(customerId)).balanceMinor)).toBe(-4000);
+    expect(await checkBalances(db.getSequelize())).toEqual([]);
+  });
+
+  test('a late offline credit sale dated before a repayment already saved: the balance and oldestUnpaidAt are as if they had arrived in date order', async () => {
+    const customerId = await setUp();
+    const day = (d) => new Date(Date.now() - d * 86400000).toISOString();
+    const dayTwo = day(2);
+    await owner.push(business, [creditSale(owner, customerId, dayTwo), repay(owner, customerId, 10000, day(1))]);
+    expect(Number((await models().Customer.findByPk(customerId)).balanceMinor)).toBe(0);
+    const { phone: associate } = await staffPhone(owner, business, 'associate');
+    expect((await associate.push(business, [creditSale(associate, customerId, day(3))])).body.results[0].status).toBe('saved'); // offline for three days
+    const row = await models().Customer.findByPk(customerId);
+    expect(Number(row.balanceMinor)).toBe(10000);
+    expect(row.oldestUnpaidAt.toISOString()).toBe(dayTwo); // the repayment paid the day-3 sale first (oldest first): day 2 is still unpaid
+    expect(await checkBalances(db.getSequelize())).toEqual([]);
+  });
+});
+
 describe('pulls', () => {
   test('an associate\'s page of only hidden rows still moves the cursor: no endless asking', async () => {
     const { phone } = await staffPhone(owner, business, 'associate');
@@ -464,12 +518,12 @@ describe('pulls', () => {
     ]);
     const types = (rows) => new Set(rows.map((r) => r.type));
     const ownerRows = await allRows(owner);
-    expect(types(ownerRows)).toEqual(new Set(['settings', 'location', 'membership', 'device', 'product', 'size', 'stockMovement', 'stockCount', 'sale']));
+    expect(types(ownerRows)).toEqual(new Set(['settings', 'location', 'membership', 'device', 'product', 'size', 'stockMovement', 'stockCount', 'sale', 'customer', 'repayment']));
     expect(ownerRows.filter((r) => r.type === 'product' || r.type === 'size').every((r) => 'costMinor' in r.data)).toBe(true);
     for (const phone of [manager, associate]) {
       const rows = await allRows(phone);
       // Associates see no one else's sales (this one made none); managers see them all.
-      expect(types(rows)).toEqual(new Set(['settings', 'location', 'product', 'size', 'stockMovement', 'stockCount', ...(phone === manager ? ['sale'] : [])]));
+      expect(types(rows)).toEqual(new Set(['settings', 'location', 'product', 'size', 'stockMovement', 'stockCount', 'customer', ...(phone === manager ? ['sale', 'repayment'] : [])]));
       if (phone === manager) rows.filter((r) => r.type === 'sale').forEach((r) => r.data.items.forEach((i) => expect(i).not.toHaveProperty('unitCostMinor')));
       expect(rows.some((r) => 'costMinor' in r.data)).toBe(false);
       const stockFields = rows.filter((r) => r.type === 'stockMovement').flatMap((r) => Object.keys(r.data));

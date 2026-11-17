@@ -21,16 +21,18 @@ The API for Shop Book, an offline-first bookkeeping app for market traders: Expr
 | `npm run dev` | Starts the server with `.env`, restarting when a file changes |
 | `npm start` | Starts the server with the environment already set (Render) |
 | `npm test` | Everyday tests: `check:api-docs`, then the unit and API tests, using `.env.test` (aim: under 3 minutes). Leaves out the isolation and torture suites |
-| `npm run test:all` | Everything: `npm test`, then `test:isolation`, then `test:sync`. **Must pass for every task's Done when.** Stops at the first failure |
+| `npm run test:all` | Everything: `npm test`, then `test:isolation`, then `test:sync`, then `test:concurrency`. **Must pass for every task's Done when.** Stops at the first failure |
+| `npm run test:concurrency` | Races on the same records (repayments, reversals, a sale) on real MySQL, 20 times each, and the debt-lot benchmark; three runs in a row |
 | `npm run check:api-docs` | Checks that `docs/api.md` lists exactly the server's routes |
 | `npm run db:migrate` / `db:migrate:status` / `db:migrate:undo` | Migrations on the development database (`.env`) |
 | `npm run db:migrate:test` | Migrations on the test database (`.env.test`) |
 | `npm run test:isolation` | The business isolation tests on their own |
 | `npm run test:sync` | The sync torture test (`tests/torture`), three runs in a row; stops at the first failing run |
 | `npm run check:sequences` / `check:operations` / `check:stock` / `check:receipts` / `check:balances` | Read-only consistency checks of sync on the development database; print any problem (IDs only) and exit 1, change nothing |
+| `npm run check:photo-storage` | Checks the photo storage in `.env` (BE6.5): writes one test photo under a fixed test key, reads it back, removes it. For checking your development R2 bucket (`PHOTO_STORAGE=r2` and the four `R2_` values in `.env`) |
 | `npm run dev:sign -- …` | Signs test requests with a throwaway test key (development only; see `docs/guide.md`) |
 
-`check:sequences` and `check:operations` exist since BE5, `check:stock` since BE7, `check:receipts` and `check:balances` since BE8 (`check:balances` becomes the full debt-lot rebuild in BE9). On production they're run only by the project owner: `node --env-file=.env.production scripts/check.js sequences` (read-only).
+`check:sequences` and `check:operations` exist since BE5, `check:stock` since BE7, `check:receipts` and `check:balances` since BE8 (`check:balances` rebuilds every customer's debt lots from scratch since BE9). On production they're run only by the project owner: `node --env-file=.env.production scripts/check.js sequences` (read-only).
 
 ## Deployment
 

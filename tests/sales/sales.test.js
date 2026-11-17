@@ -318,12 +318,12 @@ describe('saved and flagged, never refused', () => {
   });
 });
 
-describe('customers (BE8: created only)', () => {
-  test('any role adds a customer with the business\'s default language; a bad phone number is refused; editing waits for BE9', async () => {
+describe('customers (added in BE8)', () => {
+  test('any role adds a customer with the business\'s default language; a bad phone number is refused; the owner can edit (BE9)', async () => {
     const c = await customer(shop.associate, { name: '  Efua   Mensah ', phone: '024 555 1234' });
     expect(await s().Customer.findOne({ where: { id: c } })).toMatchObject({ name: 'Efua Mensah', phone: '+233245551234', language: 'en', version: 1 });
     expect((await one(shop.owner, op('customer.upsert', { customerId: randomUUID(), baseVersion: null, fields: { name: 'X', phone: '12' } }))).error.fields).toEqual({ phone: 'Enter a valid mobile number, for example 024 123 4567.' });
-    expect((await one(shop.owner, op('customer.upsert', { customerId: c, baseVersion: 1, fields: { name: 'New' } }))).error.code).toBe('INVALID_PAYLOAD');
+    expect((await one(shop.owner, op('customer.upsert', { customerId: c, baseVersion: 1, fields: { name: 'New' } }))).status).toBe('saved'); // editing: BE9
   });
 });
 

@@ -3,16 +3,22 @@
 // accepts; changing the texts in a way people must agree to again means
 // raising it, and then everyone is asked to accept the new version
 // (403 TERMS_REQUIRED until they do).
+//
+// The texts write the product's name as {{productName}}; it's filled in from
+// src/brand.js when they're read, so the name lives in one place.
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { PRODUCT_NAME } = require('./brand');
 
 const TERMS_VERSION = '1';
 const LEGAL_DIR = path.resolve(__dirname, '../legal');
 
-// Reads one document (privacy or terms) in one language.
+// Reads one document (privacy or terms) in one language, with the product's
+// name filled in.
 function read(document, language) {
-  return fs.readFileSync(path.join(LEGAL_DIR, `${document}.${language}.md`), 'utf8');
+  const text = fs.readFileSync(path.join(LEGAL_DIR, `${document}.${language}.md`), 'utf8');
+  return text.replaceAll('{{productName}}', PRODUCT_NAME);
 }
 
 const documents = Object.freeze({

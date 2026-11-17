@@ -2,11 +2,13 @@
 // environment as the server, so `npm run db:migrate` uses exactly the database
 // the server would. The env file chosen by the npm script (.env, .env.test, or
 // your own .env.production) decides which database that is.
+// Migrations never touch photos, so the photo-storage check (the R2 values)
+// is skipped here; the server itself still requires them (BE6.5).
 
-const { getConfigOrExit } = require('./env');
+const { getMigrationConfigOrExit } = require('./env');
 const { buildDbOptions } = require('./database');
 
-const options = buildDbOptions(getConfigOrExit());
+const options = buildDbOptions(getMigrationConfigOrExit());
 
 // sequelize-cli looks up the block named after NODE_ENV; all three are the
 // same because the env file has already chosen the database.

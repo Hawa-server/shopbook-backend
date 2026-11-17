@@ -18,6 +18,7 @@ How to build the **phone app** for Shop Book: an installable web app (PWA) for A
 | FE5 onwards (features) | **FE3.5** (the two-phone torture test passes), plus the matching server task |
 | FE8 (customers and debts) | BE9 **and BE13** (the "Remind today" list uses `GET /reports/reminders`) |
 | FE13, FE14 | BE15, BE16 (and BE17 for the Help message's version) |
+| FE15 (Play Store release) | FE12 done; the brand and the package name decided by me; the server's privacy notice names the brand |
 
 ---
 
@@ -358,6 +359,14 @@ Statements, receipts and reminders open **WhatsApp** (`https://wa.me/<number>?te
 
 ---
 
+## Play Store ready (from 11 Nov 2026)
+
+The app will also be released on Google Play as a Trusted Web Activity (FE15): the live site, opened full-screen by a small Android app. So, in every task:
+
+- **Nothing that only works in a browser tab.** No feature may depend on the address bar, browser menus, pop-up windows or opening a second tab. Links that leave the app (WhatsApp, email) open the phone's own app; downloads (CSV) and sharing must work in the installed app too.
+- **The manifest stays complete:** `id`, name and short name from `app.name`, a real description, `lang`, `start_url`, `scope`, `display: standalone`, portrait, theme and background colours, the 192 and 512 icons and the maskable icon, and (from FE15) `categories` and `screenshots`.
+- **Nothing breaks the link with the store app:** `/.well-known/` is never rewritten to the app, and the app stays on one origin.
+
 ## Testing on phones
 
 - **Every task:** 390px width in the browser, **airplane mode**, and a real Android phone where possible.
@@ -401,7 +410,7 @@ With **two real phones** (or one phone and a laptop browser) signed in to the sa
 - both in airplane mode, records made on both, then reconnected → everything appears on both, once
 - the network cut in the middle of a sync (airplane mode on during "Sending…") → nothing lost or doubled after reconnecting
 - the app closed during a save → either the whole record is there or none of it
-- the same settings field edited on both phones offline → the last one sent wins everywhere, and `ChangeLog` marks the earlier one `conflict: true`
+- the same settings field edited on both phones offline → the last one sent wins everywhere, and `ChangeLog` marks the later change, the one that arrived with an out-of-date `baseVersion`, `conflict: true`; it still wins
 - one person removed by the owner, and one phone revoked → those phones are wiped on their next sync
 - the session expired while offline → selling continues; after signing in, everything is sent
 - an app update installed while records are unsent → nothing lost
@@ -416,13 +425,15 @@ Owner's team screen: add staff (name, phone number, role, email optional; shows 
 
 ### FE5 — Products, sizes and prices (Epic 1)
 
-Product list with search and type filter, add/edit product (type, unit, size ranges and custom sizes, prices, per-size prices, starting stock), hide/unhide, the owner's "Cost price needed" list, change history (owner).
+Product list with search and type filter, add/edit product (type, unit, size ranges and custom sizes, prices, per-size prices, starting stock: an `opening` movement for each box with a number, an empty box sends nothing), hide/unhide, the owner's "Cost price needed" list, change history (owner and manager, as `api.md` allows; the server removes cost from the manager's copy).
 
-**Done when:** every Epic 1 acceptance criterion that applies to the phone passes, including search in under half a second with 2,000 products.
+**Moved here from FE6 (decided 11 Nov 2026):** the stock pull rows (`stockMovement`, `stockCount`), the stock rule (`api.md` "The stock rule", tested against its shared fixtures), and `stockLevels` kept up to date, so the product list shows each product's stock (AC24) and a size can only be removed at 0 (AC11). The stock screens stay in FE6.
+
+**Done when:** every Epic 1 acceptance criterion that applies to the phone passes, including search in under half a second with 2,000 products (on the laptop, and on a low-end Android phone); the app's stock rule gives the answers in `api.md`'s shared fixtures.
 
 ### FE6 — Stock (Epic 2)
 
-Stock list (search; All / Low / Out of stock / Below zero) and each product's sizes; add a delivery with a quantity box per size (the owner can update the cost price from the same screen); remove stock with a reason and confirmation; count a size (saves the counted number with the number shown and the cursor; the difference is worked out, reason if different; a "Check this count" notice when the server flags `countCheck`), reused by the day close; low-stock list and badge; per-product low-stock level; "Check the shelf" list; stock history (owner and manager); `stockLevels` kept up to date.
+Stock list (search; All / Low / Out of stock / Below zero) and each product's sizes; add a delivery with a quantity box per size (the owner can update the cost price from the same screen); remove stock with a reason and confirmation; count a size (saves the counted number with the number shown and the cursor; the difference is worked out, reason if different; a "Check this count" notice when the server flags `countCheck`), reused by the day close; low-stock list and badge; per-product low-stock level; "Check the shelf" list; stock history (owner and manager); all using FE5's `stockLevels` and stock rule.
 
 **Done when:** every Epic 2 acceptance criterion that applies to the phone passes; adding, removing and counting stock update quantities instantly offline; half yards display correctly; the stock list opens in under a second with 2,000 products.
 
@@ -498,3 +509,24 @@ Every screen at 360px and 390px, in English and Twi (a Twi speaker reviews the w
 **Done when:** the test shop uses the app for a full day without the notebook; every clip listed in `design.md` §12 plays in airplane mode in both languages, all the clips together are under 1 MB, and a test shows the button hidden when the phone can't play the format.
 
 **If time runs short:** FE1–FE8, FE11 and FE13's download and Help make a usable first version; FE9, FE10, closing a business and FE14 (practice shop) can follow.
+
+### FE15 — Play Store release (Android) (F19)
+
+Added 11 Nov 2026. The last task, after FE12: the same live app, installable from Google Play. No new screens except the privacy page; no new app library.
+
+- **Packaging: Bubblewrap**, Google's command-line tool, run on my laptop (a build tool, never an app dependency). Why not PWABuilder: it works through a website and can create and keep the signing key for you, but our key must be made and kept only by me; Bubblewrap does everything on the laptop and its settings file (`twa-manifest.json`) can be kept with the project. The Android project it generates and any key files stay out of Git (`.gitignore`). Package name decided by me (for example `com.<brand>.app`) and never changed after the first release.
+- **Digital Asset Links:** `public/.well-known/assetlinks.json` names the package and the SHA-256 fingerprints of the **app signing key** (shown in Play Console when Play App Signing is on) and of the **upload key**. `vercel.json` excludes `/.well-known/` from the app rewrite and serves the file as `application/json`. This is what lets the installed app open without the browser address bar.
+- **Privacy page:** `/privacy` (and `/terms`), readable without signing in and linked from Welcome and More. It shows the privacy notice from `GET /api/legal/current` (public, not signed) in the person's language with `MarkdownText`, and keeps the last copy on the phone so it opens offline. The text itself comes only from the server; if it doesn't name the brand, that's a backend change. The live `/privacy` address is the privacy policy link in the store listing.
+- **Manifest:** completed as in "Play Store ready" (adds `categories` and `screenshots`).
+- **Store listing** (files kept in `store/`, text in English and Twi, reviewed by a Twi speaker): the brand name; a short description (up to 80 characters) and a long one (up to 4,000); the 512×512 icon; a 1024×500 feature graphic from `design.md`; at least four phone screenshots taken in the test shop (never real customers). If Play Console doesn't offer Twi as a listing language, the Twi text goes below the English in the same description.
+- **Uninstalling:** Help and the store description say plainly that uninstalling the app can delete records not yet sent from that phone, so send everything first ("All sent" in the header).
+
+**For me (not built, not written up as steps):** the Google Play developer account; the upload key, generated and kept by me, backed up safely, never in Git or chat; Play App Signing; the store listing, Data safety form and content rating; the closed test with real testers that Play requires of new personal accounts (the number of testers and days shown in Play Console); then the release.
+
+**Done when:**
+- the app installed from the closed test opens **with no browser address bar** (proves `assetlinks.json` works);
+- it opens and sells in airplane mode;
+- installing an update from Play with records not yet sent keeps every record and every unsent operation;
+- Chrome DevTools shows the manifest with no errors and the app as installable, and Bubblewrap's checks pass;
+- `/privacy` opens without signing in, in English and Twi, and offline after the first visit;
+- the listing, icon, feature graphic and screenshots are in `store/`, in English and Twi.

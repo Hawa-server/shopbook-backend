@@ -123,6 +123,7 @@ async function up(queryInterface) {
       UNIQUE KEY uq_${name.toLowerCase()}_business_id (businessId, id),
       UNIQUE KEY uq_${name.toLowerCase()}_source (businessId, sourceType, sourceId),
       KEY ix_${name.toLowerCase()}_customer (businessId, customerId, orderKey),
+      KEY ix_${name.toLowerCase()}_open (businessId, customerId, ${amountColumn}),
       CONSTRAINT fk_${name.toLowerCase()}_customer FOREIGN KEY (businessId, customerId) REFERENCES Customer (businessId, id),
       CONSTRAINT ck_${name.toLowerCase()}_amounts CHECK (originalMinor > 0 AND ${amountColumn} >= 0 AND ${amountColumn} <= originalMinor)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
@@ -149,9 +150,17 @@ async function up(queryInterface) {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
   `);
 
-  // The data step: every customer who has a credit sale gets their lots,
-  // from the same rebuild code the server runs, in one transaction.
-  const models = defineModels(sequelize);
+  await buildExistingLots(sequelize);
+}
+
+// The data step: every customer who has a credit sale gets their lots, from
+// the SAME rebuild code the server runs (debtLots.rebuildFull), all in one
+// transaction. Exported so a test can run exactly this step and then check
+// that check:balances finds nothing wrong.
+async function buildExistingLots(sequelize) {
+  const run = (sql, options) => sequelize.query(sql, options);
+  const models = sequelize.models.Customer ? sequelize.models : defineModels(sequelize);
+  let corrected = 0;
   await sequelize.transaction(async (transaction) => {
     const [customers] = await run(`
       SELECT DISTINCT c.businessId, c.id AS customerId, b.timezone
@@ -162,6 +171,7 @@ async function up(queryInterface) {
       const { changed } = await debtLots.rebuildFull(models, transaction, { businessId: c.businessId, customerId: c.customerId, timeZone: c.timezone });
       if (changed) {
         // The cache was corrected: give the customer row a new sequence number.
+        corrected += 1;
         await run('UPDATE SyncSequence SET lastSeq = lastSeq + 1 WHERE businessId = ?', { replacements: [c.businessId], transaction });
         await run('UPDATE Customer SET serverSeq = (SELECT lastSeq FROM SyncSequence WHERE businessId = ?) WHERE businessId = ? AND id = ?', {
           replacements: [c.businessId, c.businessId, c.customerId], transaction,
@@ -169,6 +179,7 @@ async function up(queryInterface) {
       }
     }
   });
+  return { corrected };
 }
 
 // Drops them again (development only; production goes forward).
@@ -177,4 +188,4 @@ async function down(queryInterface) {
   for (const table of ['DebtAllocation', 'CreditLot', 'DebtLot', 'OpeningDebt', 'DebtWriteOff', 'Repayment']) await run(`DROP TABLE ${table}`);
 }
 
-module.exports = { up, down };
+module.exports = { up, down, buildExistingLots };

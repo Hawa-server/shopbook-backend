@@ -37,9 +37,27 @@ function idFor(...parts) {
 
 const byKey = (a, b) => (a.orderKey < b.orderKey ? -1 : a.orderKey > b.orderKey ? 1 : 0);
 
-// A fresh, empty state for one customer.
+// A fresh, empty state for one customer. Lots are kept IN ORDER (oldest
+// first) and a lot that's paid off (or a credit used up) never reopens, so
+// the "first open" pointers only move forward: paying the oldest debt first
+// never has to look at the closed ones again, however long the history.
 function emptyState(businessId) {
-  return { businessId, debtLots: [], creditLots: [], allocations: [] };
+  return { businessId, debtLots: [], creditLots: [], allocations: [], firstOpenDebt: 0, firstOpenCredit: 0, lotOfSale: new Map() };
+}
+
+// Moves the pointers past lots that are paid off / credits that are used up.
+function advance(state) {
+  while (state.firstOpenDebt < state.debtLots.length && state.debtLots[state.firstOpenDebt].outstandingMinor === 0) state.firstOpenDebt += 1;
+  while (state.firstOpenCredit < state.creditLots.length && state.creditLots[state.firstOpenCredit].remainingMinor === 0) state.firstOpenCredit += 1;
+}
+
+// Adds lots already worked out (loaded from the database) to a state, in order.
+function withLots(state, debtLots, creditLots) {
+  state.debtLots.push(...[...debtLots].sort(byKey));
+  state.creditLots.push(...[...creditLots].sort(byKey));
+  for (const lot of state.debtLots) if (lot.sourceType === 'credit_sale') state.lotOfSale.set(lot.sourceId, lot);
+  advance(state);
+  return state;
 }
 
 // Adds one allocation (a reduction of one debt lot by one source).
@@ -63,12 +81,14 @@ function addCredit(state, sourceType, e, amountMinor, orderKey) {
 // Pays debt lots OLDEST first with `amount` from one source; returns what's left.
 function payOldestFirst(state, amount, sourceType, sourceId, orderKey) {
   let left = amount;
-  for (const lot of state.debtLots.filter((l) => l.outstandingMinor > 0).sort(byKey)) {
-    if (left === 0) break;
+  for (let i = state.firstOpenDebt; i < state.debtLots.length && left > 0; i += 1) {
+    const lot = state.debtLots[i];
+    if (lot.outstandingMinor === 0) continue; // (a return can close a lot further on)
     const take = Math.min(left, lot.outstandingMinor);
     allocate(state, lot, sourceType, sourceId, take, orderKey);
     left -= take;
   }
+  advance(state);
   return left;
 }
 
@@ -84,19 +104,23 @@ function apply(state, e) {
       originalMinor: e.amountMinor, outstandingMinor: e.amountMinor, effectiveAt: new Date(e.effectiveAt), orderKey,
     };
     state.debtLots.push(lot);
-    for (const credit of state.creditLots.filter((c) => c.remainingMinor > 0).sort(byKey)) {
-      if (lot.outstandingMinor === 0) break;
+    if (e.kind === 'credit_sale') state.lotOfSale.set(e.id, lot);
+    for (let i = state.firstOpenCredit; i < state.creditLots.length && lot.outstandingMinor > 0; i += 1) {
+      const credit = state.creditLots[i];
+      if (credit.remainingMinor === 0) continue;
       const take = Math.min(credit.remainingMinor, lot.outstandingMinor);
       credit.remainingMinor -= take;
       allocate(state, lot, 'credit_lot', credit.id, take, orderKey);
     }
+    advance(state);
   } else if (e.kind === 'return') {
     // 2. (BE10) A return's debt part reduces ONLY its own sale's lot; the rest is credit.
-    const lot = state.debtLots.find((l) => l.sourceType === 'credit_sale' && l.sourceId === e.saleId);
+    const lot = state.lotOfSale.get(e.saleId);
     const take = lot ? Math.min(lot.outstandingMinor, e.debtReducedMinor) : 0;
     if (take > 0) allocate(state, lot, 'return_debt', e.id, take, orderKey);
     addCredit(state, 'return_excess', e, e.debtReducedMinor - take, orderKey);
     addCredit(state, 'return_kept_as_credit', e, e.keptAsCreditMinor ?? 0, orderKey); // 4.
+    advance(state);
   } else {
     // 3. Repayments and write-offs pay the oldest debts first; extra becomes credit.
     const allocType = e.kind === 'repayment' ? 'repayment' : 'write_off';
@@ -111,15 +135,17 @@ function apply(state, e) {
 function summary(state) {
   const owed = state.debtLots.reduce((sum, l) => sum + l.outstandingMinor, 0);
   const credit = state.creditLots.reduce((sum, c) => sum + c.remainingMinor, 0);
-  const oldest = state.debtLots.filter((l) => l.outstandingMinor > 0).sort(byKey)[0];
+  advance(state);
+  const oldest = state.debtLots.slice(state.firstOpenDebt).find((l) => l.outstandingMinor > 0);
   return { balanceMinor: owed - credit, oldestUnpaidAt: oldest ? oldest.effectiveAt : null };
 }
 
 // The full rebuild: every event, in order, from an empty state.
 function rebuild(businessId, events) {
   const state = emptyState(businessId);
-  [...events].sort((a, b) => byKey({ orderKey: orderKeyOf(a) }, { orderKey: orderKeyOf(b) })).forEach((e) => apply(state, e));
-  return { ...state, ...summary(state) };
+  events.map((e) => ({ e, orderKey: orderKeyOf(e) })).sort(byKey).forEach(({ e }) => apply(state, e));
+  const { businessId: _b, firstOpenDebt, firstOpenCredit, lotOfSale, ...rows } = state; // eslint-disable-line no-unused-vars
+  return { ...rows, ...summary(state) };
 }
 
-module.exports = { KIND_RANK, orderKeyOf, idFor, apply, summary, rebuild, emptyState };
+module.exports = { KIND_RANK, orderKeyOf, idFor, apply, summary, rebuild, emptyState, withLots };

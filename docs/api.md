@@ -8,6 +8,9 @@ The contract between the Shop Book server and the phone app. **The app uses only
 
 Newest first.
 
+- **BE6.5 (Product photos):** new endpoints **`PUT /api/photos/:photoId`** (owner and manager: upload a photo's bytes; signed) and **`GET /api/photos/:photoId`** (every member: the photo back, cacheable for a year). `product.upsert` gains **`fields.photoId`** (UUID or `null`; may name a photo **not uploaded yet**), and the `product` pull row gains **`photoId`**. A photo change is an ordinary product edit (new `version`). New error codes: `PHOTO_TYPE_NOT_ALLOWED` (415), `PHOTO_TOO_LARGE` (413), `PHOTO_HAS_METADATA` (415), `PHOTO_ID_TAKEN` (409), `PHOTO_STORAGE_UNAVAILABLE` (503). See **Product photos** for how the app resizes, strips and uploads them, and when to upload again.
+- **Product name (11 Nov 2026):** the product is now called **Tabova**. Text from the server that names it now says "Tabova" instead of "Shop Book": the privacy notice and terms in `GET /api/legal/current` (`version` stays `"1"`: nobody is asked to accept again), the account emails, and the messages of `403 ORIGIN_REQUIRED` and `403 RESET_NOT_ALLOWED`. No field, code or endpoint changed. ("Shop Book" elsewhere in this file is the working name.)
+- **BE9 (Customers, credit and repayments):** `customer.upsert` now **edits** too (owner and manager; credit limit owner only; can't hide a customer who owes: `CUSTOMER_OWES`), customer names up to **80** characters, and a `CUSTOMER_PHONE_DUPLICATE` **warning** (never an error) in `result.warnings`. New sync operations **`repayment.create`** (every role; more than owed is saved and flagged `overpaid`; a switched-off method is saved and flagged `methodDisabled`), **`debtWriteOff.create`** (owner) and **`openingDebt.create`** (owner and manager), each with its **reversal** (the same type with `corrects…Id`, `customerId` and a reason; once only: `ALREADY_REVERSED`; never of a reversal: `CANNOT_REVERSE_A_REVERSAL`). Pull row types **`repayment`** (associates: their own, no reversals), **`debtWriteOff`** and **`openingDebt`** (owner and manager). `customer.balanceMinor` can now be **below zero** (in credit). New endpoint **`GET /api/customers/:customerId/history`** (owner and manager; needs internet). New push rejection codes: `CUSTOMER_OWES`, `ALREADY_REVERSED`, `CANNOT_REVERSE_A_REVERSAL`. **Removed:** the BE4.5 check `PAYMENT_METHOD_NOT_ENABLED` (never sent to the app): a switched-off method is now saved and flagged, an unknown one rejected `PAYMENT_METHOD_UNKNOWN`.
 - **BE8 (Sales):** sync operations **`sale.create`** (every role) and **`customer.upsert`** (create only for now; every role), pull row types **`sale`** (with its lines and payments inside; **associates receive only their own sales**; `unitCostMinor` and the `belowCost` flag owner only) and **`customer`** (everyone), **the sale rule** (line totals rounded to the nearest minor unit, halves up; set price from the version used) with shared test fixtures, sale flags (`belowZeroOnArrival`, `clockSkew`, `overCreditLimit`, `afterDayClose`, `belowCost`, `olderPrice`, `roundedLine`, `methodDisabled`), `saleId` in the owner's and managers' `stockMovement` rows. The first sale sets `localeLocked`. New push rejection codes: `SALE_TOTALS_MISMATCH`, `PRICE_VERSION_MISMATCH`, `UNKNOWN_PRICE_VERSION`, `RECEIPT_NUMBER_TAKEN`, `RECEIPT_NUMBER_INVALID`, `PAYMENT_METHOD_UNKNOWN`. New enums: `priceType`, sale flags.
 - **BE7 (Stock):** sync operations **`stock.create`** (opening, restock, removal) and **`stockCount.create`** (owner and manager; associates `FORBIDDEN`), pull row types **`stockMovement`** and **`stockCount`** (everyone; associates get only the fields the stock rule needs), **the stock rule** (stock on hand, a count's difference, "check this count") with shared test fixtures, movement `flags` (`belowZeroOnArrival`, `clockSkew`), product fields `lowStockLevelUnits` and `lowStockWarnings`. New push rejection codes: `SIZE_HAS_STOCK` (removing a size that still has stock), `UNIT_LOCKED` (switching between yards and other units once there's stock). New enums: stock movement `type`, removal `reason`, count `reason`.
 - **BE6 (Products, sizes and prices):** sync operations **`product.upsert`** and **`size.upsert`** (owner and manager; cost prices owner only), pull row types **`product`** and **`size`** (everyone; **`costMinor` only in the owner's rows**, absent for everyone else), push results with **`warnings`** (`WHOLESALE_ABOVE_RETAIL`, `BELOW_COST` for the owner only, `PRODUCT_NAME_DUPLICATE`, `SIZE_LABEL_DUPLICATE`: never errors), new endpoint **`GET /api/products/:productId/history`** (owner and manager), and **`sizeRanges`** in `GET /api/reference`. New push rejection codes: `NOT_FOUND`, `ID_TAKEN`, `SIZES_NOT_ALLOWED`. New enums: product `type`, `unit`.
@@ -57,7 +60,7 @@ Sign-up, sign-in, forgot password and reset password must come from the app itse
 | Header | On | Meaning |
 |---|---|---|
 | `X-Request-Id` | Every response | A UUID for this request. Keep the one from the **last failed** request: the Help message ("Report a problem") includes it, and it's the same reference a 500 error shows. |
-| `Cache-Control: no-store` | Every `/api` response | Don't cache API answers (the service worker must never cache `/api`). |
+| `Cache-Control: no-store` | Every `/api` response except a photo download | Don't cache API answers (the service worker must never cache `/api`). A photo download (`GET /api/photos/:photoId`) instead says `private, max-age=31536000, immutable`: the bytes of a `photoId` never change. |
 | `X-Server-Time` | Every response | The server's clock, integer milliseconds since 1970 (UTC). Keep `offset = X-Server-Time − Date.now()` (update it from every response) and sign with `Date.now() + offset`, so a phone set to the wrong time still signs correctly. |
 
 ### Phones and signed requests
@@ -117,7 +120,7 @@ The server checks, after the sign-in and the business (`X-Business`): the device
 
 ### Limits
 
-- Request body: at most **1 MB** (larger: `413 PAYLOAD_TOO_LARGE`).
+- Request body: at most **1 MB** (larger: `413 PAYLOAD_TOO_LARGE`). A photo upload: at most **300 KB** (larger: `413 PHOTO_TOO_LARGE`).
 - Rate limits: given per endpoint below; over the limit the answer is `429 RATE_LIMITED` with a `Retry-After` header (seconds).
 
 ---
@@ -140,7 +143,7 @@ Decide what to do from **`code`** (stable), never from `message` (wording may ch
 
 | Code | HTTP | Meaning | What the app should do |
 |---|---|---|---|
-| `NOT_FOUND` | 404, or (push result) | No such endpoint, or a record that doesn't exist **or belongs to another business** (the server never says which). As a push result: the operation edits a product or size the server doesn't have (for example an edit sent without its create). | Treat as a bug for endpoints; for a record, show "Not found". Don't retry. In a push: "Needs attention". |
+| `NOT_FOUND` | 404, or (push result) | No such endpoint, or a record that doesn't exist **or belongs to another business** (the server never says which). As a push result: the operation names a product, size, customer, shop or record (to reverse) the server doesn't have in this business (for example an edit sent without its create). | Treat as a bug for endpoints; for a record, show "Not found". Don't retry. In a push: "Needs attention". |
 | `CSRF_HEADER_MISSING` | 403 | A `POST`/`PUT`/`PATCH`/`DELETE` without `X-Requested-With: XMLHttpRequest`. | App bug: the shared API helper must always send it. Don't retry. Report via Help. |
 | `ORIGIN_NOT_ALLOWED` | 403 | The browser said the request came from another website. | Shouldn't happen from the app; don't retry. Report via Help. |
 | `INVALID_JSON` | 400 | The body isn't valid JSON. | App bug; don't retry. |
@@ -169,7 +172,7 @@ Decide what to do from **`code`** (stable), never from `message` (wording may ch
 | `ALREADY_INVITED` | 409 | That person already has a pending invitation to this business. | Show "This person has already been invited." |
 | `MEMBER_REMOVED` | 409 | The membership has ended (removed, declined or cancelled). | Refresh the team list. |
 | `OWNER_CANNOT_CHANGE` | 409 | The owner's own membership can't be changed, removed or reset from the team screen. | Don't offer these actions on the owner's row. |
-| `RESET_NOT_ALLOWED` | 403 | The owner tried to reset the password of someone who also belongs to another business. | Show "This person also uses Shop Book with another business. They can reset their password by email, or ask for help." |
+| `RESET_NOT_ALLOWED` | 403 | The owner tried to reset the password of someone who also belongs to another business. | Show "This person also uses Tabova with another business. They can reset their password by email, or ask for help." |
 | `CURRENCY_LOCKED` | 409 | The business already has money records, so its country, currency and time zone can't change. | Show "These can't change once money has been recorded." Hide the edit once `localeLocked` is `true`. |
 | `DEVICE_NOT_REGISTERED` | 403 | This phone isn't registered for this person in this business (no or unknown `X-Device-Id`, storage cleared, reinstalled). | Register this phone again (`POST /api/devices/challenge`, then `POST /api/devices`, asking for the password), then repeat the request. Keep the outbox. |
 | `DEVICE_REVOKED` | 403 | The owner removed this phone (lost or stolen), or the person was removed from the business. | **Wipe that business's local database** (outbox included) and explain "This phone was removed from [business]". The person can sign in and register again on a new phone (a new device). |
@@ -192,7 +195,15 @@ Decide what to do from **`code`** (stable), never from `message` (wording may ch
 | `RECEIPT_NUMBER_TAKEN` | (push result) | This receipt number is already used in the business (by a sale, correction or repayment). | "Needs attention": app bug in the receipt counter. Show "This receipt number was already used." |
 | `RECEIPT_NUMBER_INVALID` | (push result) | The receipt number doesn't start with this phone's `deviceCode` for this business. | "Needs attention": app bug (each business on the phone has its own code and counter). |
 | `PAYMENT_METHOD_UNKNOWN` | (push result) | A payment method code that doesn't exist at all. (A known method the business has switched off is **saved and flagged** `methodDisabled`, never rejected.) | "Needs attention": app bug. |
+| `CUSTOMER_OWES` | (push result) | A customer who owes (or is owed) money can't be hidden. `message` and `fields.isHidden`: "Ama still owes GH₵ 120.00." / "The shop still owes Ama GH₵ 20.00." | Show the message; offer the customer's page instead. |
+| `ALREADY_REVERSED` | (push result) | This repayment, write-off or debt brought forward has already been reversed (once only). | Refresh the history; "This was already corrected." |
+| `CANNOT_REVERSE_A_REVERSAL` | (push result) | The record named is itself a reversal. A mistaken reversal is fixed by recording the original again as a new record. | Don't offer "Correct" on a reversal. |
 | `OP_ID_CONFLICT` | (push result) | This `opId` was already used for a different operation (other device, type or payload). Nothing applied. | "Needs attention" marked "App problem: tell the developer"; include it in the Help message. |
+| `PHOTO_TYPE_NOT_ALLOWED` | 415 | The upload isn't a JPEG or WebP, judged from its **bytes** (not the `Content-Type` or the file name). PNG, HEIC, GIF, SVG, animated WebP and JSON are all refused. | App bug: the app must re-save every photo through a canvas as WebP (or JPEG). Don't retry the same bytes. |
+| `PHOTO_TOO_LARGE` | 413 | Over **300 KB**, or over **1,600 px** on a side. | App bug: resize to about 600 px and re-encode (quality 0.8 gives 50–80 KB). Don't retry the same bytes. |
+| `PHOTO_HAS_METADATA` | 415 | The photo still has **EXIF** or **XMP** data (camera details, GPS position). JFIF headers and colour profiles are fine. | App bug: the photo skipped the canvas re-save. Re-save it and upload again. |
+| `PHOTO_ID_TAKEN` | 409 | This `photoId` already has **different** photo bytes. (The same bytes again are a normal repeat: 200.) | Make a **new** `photoId`, upload the photo with it, and send a `product.upsert` with the new ID. |
+| `PHOTO_STORAGE_UNAVAILABLE` | 503 | The server couldn't store or read the photo file just now. | **Temporary:** keep the photo and retry later with back-off. |
 | `INTERNAL_ERROR` | 500 | Something unexpected went wrong on the server. `message` is "Something went wrong. Reference: \<request id\>". | **Temporary:** keep any unsent records and retry later. Keep the reference (also in `X-Request-Id`) for the Help message. |
 
 Other failures without the error format:
@@ -439,7 +450,7 @@ The current privacy notice and terms, in English and Twi, as Markdown. Show them
   {
     "version": "1",
     "documents": {
-      "en": { "privacy": "# Shop Book privacy notice\n…", "terms": "# Shop Book terms of use\n…" },
+      "en": { "privacy": "# Tabova privacy notice\n…", "terms": "# Tabova terms of use\n…" },
       "tw": { "privacy": "…", "terms": "…" }
     }
   }
@@ -793,6 +804,108 @@ Who changed a product and its sizes, and what changed (AC30): the product screen
 
 ---
 
+## Product photos
+
+A product can have **one photo**, so sellers recognise it quickly. Photos are **not permanent records**: a photo can be replaced, and photos no product uses are cleaned up after 30 days. **Photos never block selling:** a product with a missing photo shows a placeholder, and a photo problem must never stop a product or a sale from syncing.
+
+**What the app does (Epic 1, AC35–AC40):**
+
+1. **Take or choose the photo** (owner and manager only).
+2. **Resize and re-save it through a canvas:** about **600 px** on the longest side, encoded with `canvas.toBlob(…, 'image/webp', 0.8)`, or `'image/jpeg'` where WebP isn't supported (check the blob's `type`). Aim for 50–80 KB; the server refuses over 300 KB or 1,600 px. Re-saving through a canvas **drops EXIF/XMP** (GPS position, phone model); the server refuses a photo that still has them (`PHOTO_HAS_METADATA`).
+3. **Give it a `photoId`** (`crypto.randomUUID()`) and keep the bytes in the phone's own database, keyed by `photoId`.
+4. **Save the product at once** with `product.upsert` `fields.photoId` (it goes through the outbox like any change, even offline).
+5. **Upload the photo separately**, in the background (not in a sync push): `PUT /api/photos/:photoId` with the bytes, retried with back-off until it answers 200. Temporary failures (network, 5xx, `PHOTO_STORAGE_UNAVAILABLE`, `RATE_LIMITED`) are retried; `PHOTO_ID_TAKEN` means make a new `photoId` (step 3) and send a new `product.upsert`; the other `PHOTO_…` codes are app bugs (log them for Help; don't retry the same bytes).
+6. **Show a photo:** from the phone's own copy if it has one; otherwise `GET /api/photos/:photoId` and keep the result (it never changes for that `photoId`). Until it's there, show the placeholder.
+7. **If the phone has a photo locally and the server answers `404` for it, upload it again** (`PUT`, same `photoId` and bytes). This heals a photo whose upload never finished, or one cleaned up while a phone was offline.
+
+**Clean-up rule (approved):** after each upload, the server deletes at most 20 of **that business's** photos that **no product uses** and that have been **unused for 30 days** (since a product last let go of them, or since upload if none ever used them). A product that uses a photo again keeps it.
+
+### PUT /api/photos/:photoId
+
+Uploads a product photo's bytes.
+
+- **Who:** owner and manager (associates: `403 FORBIDDEN`). **Business:** yes. **Signed:** yes, and the signature's body hash is the SHA-256 of **the exact image bytes** sent.
+- **Request:** `Content-Type: image/webp` (or `image/jpeg`); the body is the image itself (not JSON, not form data). The server decides the type from the bytes, never from this header.
+
+  ```
+  PUT /api/photos/0b6f9a52-3e1d-4c47-9a8e-5d2c7b1f4e60
+  Content-Type: image/webp
+  X-Business: …   X-Device-Id: …   X-Signed-At: …   X-Nonce: …   X-Signature: …
+  <the image bytes>
+  ```
+
+- **Response 200** (also for a repeat of the same bytes, for example after a lost answer):
+
+  ```json
+  {
+    "photo": {
+      "photoId": "0b6f9a52-3e1d-4c47-9a8e-5d2c7b1f4e60", "contentType": "image/webp",
+      "byteSize": 61342, "width": 600, "height": 450, "uploadedAt": "2026-11-11T10:00:00.000Z"
+    }
+  }
+  ```
+
+| Field | Meaning |
+|---|---|
+| `photoId` | The photo's ID (lower case). |
+| `contentType` | `image/webp` or `image/jpeg`, from the bytes. |
+| `byteSize`, `width`, `height` | Size in bytes and pixels. |
+| `uploadedAt` | When the server first stored it. |
+
+- **Rules:** JPEG or WebP only (from the bytes); at most 300 KB and 1,600 px a side; no EXIF or XMP (JFIF and colour profiles are fine). A photo is **never overwritten**: different bytes for a `photoId` that's already used answer `409 PHOTO_ID_TAKEN`.
+- **Errors:** `415 PHOTO_TYPE_NOT_ALLOWED`, `413 PHOTO_TOO_LARGE`, `415 PHOTO_HAS_METADATA`, `409 PHOTO_ID_TAKEN`, `503 PHOTO_STORAGE_UNAVAILABLE`, `404 NOT_FOUND` (the address isn't a UUID), plus the business-endpoint and signing errors.
+- **Rate limit:** 60 uploads per hour per person (`429 RATE_LIMITED` with `Retry-After`). **Available since:** BE6.5.
+
+### GET /api/photos/:photoId
+
+Downloads a photo of this business.
+
+- **Who:** every member. **Business:** yes. **Signed:** yes (no body: the hash of zero bytes).
+- **Response 200:** the image bytes, with `Content-Type: image/webp` or `image/jpeg` and `Cache-Control: private, max-age=31536000, immutable`. Show it from a blob (`URL.createObjectURL`); keep it in the phone's database by `photoId`.
+- **Errors:** `404 NOT_FOUND` when this business has no such photo **yet** (still uploading from another phone, or cleaned up), an unknown ID, or another business's photo (the server never says which): show the placeholder, and if **this** phone has the photo, upload it again (step 7 above). `503 PHOTO_STORAGE_UNAVAILABLE`: temporary, try later. Plus the business-endpoint and signing errors.
+- **Rate limit:** none. **Available since:** BE6.5.
+
+---
+
+## Customers
+
+Customers are added and changed **through sync** (`customer.upsert`). This section has only what sync can't give.
+
+### GET /api/customers/:customerId/history
+
+A customer's history (AC20): every sale to them, repayment, write-off and debt brought forward, and each reversal, **newest first**, with the customer's **balance after each one**, worked out by the server. **Needs internet** (the phone can't work these balances out itself): offline, show "History needs internet" and the balance the phone has.
+
+- **Who:** owner and manager (associates: `403 FORBIDDEN`; on their phone, a customer's history shows only what they recorded, AC21). **Business:** yes. **Signed:** yes.
+- **Response 200:**
+
+  ```json
+  {
+    "customerId": "7c1d…", "balanceMinor": 28000, "oldestUnpaidAt": "2026-11-20T08:00:00.000Z",
+    "entries": [
+      { "type": "repayment", "id": "…", "receiptNumber": "K7M-0045", "method": "cash", "amountMinor": 2000, "balanceChangeMinor": -2000, "balanceAfterMinor": 28000,
+        "effectiveAt": "…", "recordedAt": "…", "recordedBy": { "userId": "…", "name": "Kofi Boateng" }, "reversesId": null, "reversesReceiptNumber": null, "reason": null, "note": null },
+      { "type": "repayment_reversal", "id": "…", "receiptNumber": "K7M-0044", "amountMinor": 5000, "balanceChangeMinor": 5000, "balanceAfterMinor": 30000,
+        "reversesId": "…", "reversesReceiptNumber": "K7M-0043", "reason": "Typed 500 instead of 50", "…": "…" },
+      { "type": "sale", "id": "…", "receiptNumber": "K7M-0042", "amountMinor": 30000, "balanceChangeMinor": 30000, "balanceAfterMinor": 30000, "…": "…" }
+    ]
+  }
+  ```
+
+| Field | Meaning |
+|---|---|
+| `entries[].type` | `sale`, `repayment`, `repayment_reversal`, `write_off`, `write_off_reversal`, `opening_debt`, `opening_debt_reversal` (see Enums). |
+| `amountMinor` | The record's amount (for a sale: its total). |
+| `balanceChangeMinor` | What it did to the balance: + owed (a sale's credit part, a debt brought forward, a reversed payment), − paid. A cash sale changes nothing. |
+| `balanceAfterMinor` | The balance right after it. The newest entry's equals `balanceMinor`. |
+| `effectiveAt` | When it counts (a debt brought forward: the start of its `owedSince` day; everything else: when recorded). |
+| `reversesId`, `reversesReceiptNumber`, `reason` | For a reversal: what it cancels and why. Show the original with "Corrected"/"Reversed" and the reason beneath it. |
+| `owedSince` | Debts brought forward only. |
+| `method`, `receiptNumber`, `note` | When the record has them. |
+
+- **Errors:** `404 NOT_FOUND` (no such customer in this business), plus the business-endpoint errors. **Rate limit:** none. **Available since:** BE9.
+
+---
+
 ## Sync
 
 Push first, then pull, every time the app syncs (on opening, every few minutes, after a save, when the network comes back). Both are business endpoints for **every role**, signed.
@@ -848,7 +961,7 @@ Sends the outbox: at most **200** operations, **oldest first**. Each is processe
 | `duplicate` | Already applied earlier (a retry whose first answer was lost). `result` is the same as the first time. | Exactly as for `saved`. Nothing was applied twice. |
 | `rejected` | Refused, **permanently**: sending it again will always give the same answer. `error.code` says why (and `error.fields` for a payload problem). | Move it to **"Needs attention"** with the message; never drop it silently. `OP_ID_CONFLICT`: mark "App problem: tell the developer" (it means this phone sent two different things with one ID, a bug). |
 
-Rejection codes in results: `INVALID_PAYLOAD` (the operation or its payload is malformed; `fields` says where, as a path inside the payload, e.g. `fields.name`; nothing was stored, so a **corrected** operation may reuse the `opId`), `UNKNOWN_OPERATION` (no such type), `OP_ID_CONFLICT`, `FORBIDDEN` (this person's role can't do it), `VALIDATION_FAILED` (a business rule, with `fields`), `NOT_FOUND`, `ID_TAKEN`, `SIZES_NOT_ALLOWED`, `SIZE_HAS_STOCK`, `UNIT_LOCKED`, `SALE_TOTALS_MISMATCH`, `PRICE_VERSION_MISMATCH`, `UNKNOWN_PRICE_VERSION`, `RECEIPT_NUMBER_TAKEN`, `RECEIPT_NUMBER_INVALID`, `PAYMENT_METHOD_UNKNOWN`. Each type lists its own.
+Rejection codes in results: `INVALID_PAYLOAD` (the operation or its payload is malformed; `fields` says where, as a path inside the payload, e.g. `fields.name`; nothing was stored, so a **corrected** operation may reuse the `opId`), `UNKNOWN_OPERATION` (no such type), `OP_ID_CONFLICT`, `FORBIDDEN` (this person's role can't do it), `VALIDATION_FAILED` (a business rule, with `fields`), `NOT_FOUND`, `ID_TAKEN`, `SIZES_NOT_ALLOWED`, `SIZE_HAS_STOCK`, `UNIT_LOCKED`, `SALE_TOTALS_MISMATCH`, `PRICE_VERSION_MISMATCH`, `UNKNOWN_PRICE_VERSION`, `RECEIPT_NUMBER_TAKEN`, `RECEIPT_NUMBER_INVALID`, `PAYMENT_METHOD_UNKNOWN`, `CUSTOMER_OWES`, `ALREADY_REVERSED`, `CANNOT_REVERSE_A_REVERSAL`. Each type lists its own.
 
 - **Errors (the whole request):** `400 VALIDATION_FAILED` (`deviceId`, too many operations), `429 RATE_LIMITED`, plus the business-endpoint errors. **Any 5xx, a timeout or a network error is temporary**: keep every operation in the outbox and push again later (operations already saved come back as `duplicate`). A 5xx is never a rejection.
 - **Rate limit:** 120 sync requests (push and pull together) per 15 minutes per person. **Available since:** BE5.
@@ -919,7 +1032,7 @@ The owner changes the business's settings (More → Business settings). Editable
 
 #### `product.upsert`
 
-Adds a product, or edits one (name, type, unit, prices, hide/show). One operation per product; its sizes are separate `size.upsert` operations **after** it in the outbox.
+Adds a product, or edits one (name, type, unit, prices, photo, hide/show). One operation per product; its sizes are separate `size.upsert` operations **after** it in the outbox.
 
 - **Who:** owner and manager (associates: `rejected` `FORBIDDEN`). **Only the owner may send `costMinor`**: from a manager the operation is rejected `FORBIDDEN` (`fields.costMinor`); never put a cost field in a manager's form. **Since:** BE6.
 - **Add** (`baseVersion: null`, a new `productId` made with `crypto.randomUUID()` when the person saves):
@@ -953,6 +1066,7 @@ Adds a product, or edits one (name, type, unit, prices, hide/show). One operatio
 | `fields.lowStockLevelUnits` | Integer ≥ 0 **in units** (half yards for yard products), or `null` to use the business's `lowStockThreshold` (Decision 2-2). Since BE7. |
 | `fields.lowStockWarnings` | `false` turns low-stock warnings off for this product (default `true`). Since BE7. |
 | `fields.isHidden` | `true` hides the product from the selling list (past sales and reports keep it); `false` shows it again. Products are never deleted. |
+| `fields.photoId` | The product's photo: a UUID, or `null` for no photo. **The photo may not be uploaded yet** (it's uploaded separately, see Product photos): any well-formed UUID is accepted. A photo change is an ordinary edit (new `version`, prices unchanged). Since BE6.5. |
 
 The server sets `unitScale` itself (2 for `yard`, so 2.5 yards is 5 units; 1 for everything else).
 
@@ -1063,27 +1177,36 @@ A physical count of one size at one shop (AC10–AC12, Decision 2-5): the number
 
 #### `customer.upsert`
 
-Adds a customer (AC15: added quickly during a sale, with a name and an optional phone number, without leaving the sale). **Since BE8 only adding** (`baseVersion: null`); editing a customer and setting credit limits arrive with BE9.
+Adds a customer (anyone, AC1; also in the middle of a sale, AC15), or edits one (owner and manager, AC5–AC9).
 
-- **Who:** every role. **Since:** BE8.
-- **Payload:**
+- **Who:** adding: every role. Editing (`baseVersion` a number): owner and manager (associates: `FORBIDDEN`). **`creditLimitMinor`: owner only** (from anyone else the operation is rejected `FORBIDDEN`, `fields.creditLimitMinor`). **Since:** BE8 (adding), BE9 (editing).
+- **Add:**
 
   ```json
   { "customerId": "7c1d…", "baseVersion": null, "fields": { "name": "Ama Owusu", "phone": "024 555 1234", "language": "tw" } }
   ```
 
+- **Edit** (`baseVersion`: the customer's `version` when the person started editing; only the fields that changed):
+
+  ```json
+  { "customerId": "7c1d…", "baseVersion": 1, "fields": { "phone": "020 111 2222", "creditLimitMinor": 50000 } }
+  ```
+
 | Field | Rules |
 |---|---|
 | `customerId` | UUID made on the phone. A sale can name it straight after, in the same push. |
-| `baseVersion` | Must be `null` (any number: `INVALID_PAYLOAD` until BE9). |
-| `fields.name` | 1–60 characters (trimmed, double spaces removed). |
-| `fields.phone` | Optional; a mobile number read with the business's country, stored E.164 (`VALIDATION_FAILED`, `fields.phone`: "Enter a valid mobile number, for example 024 123 4567."). |
-| `fields.language` | Optional language tag for the customer's receipts and messages; default the business's `defaultLanguage`. |
+| `baseVersion` | `null` to add; the version edited, to edit ("last change received wins, with history", like products). |
+| `fields.name` | 1–**80** characters (trimmed, double spaces removed). **Required to add.** |
+| `fields.phone` | A mobile number read with the business's country, stored E.164, or `null` (none) (`VALIDATION_FAILED`, `fields.phone`: "Enter a valid mobile number, for example 024 123 4567."). |
+| `fields.language` | Language tag for the customer's receipts and messages; default the business's `defaultLanguage`. |
+| `fields.creditLimitMinor` | Integer ≥ 0 in minor units, or `null` (no limit). **Owner only.** When adding without it, the business's `defaultCreditLimitMinor` is copied in. |
+| `fields.isHidden` | `true` hides the customer from lists; **refused while their balance isn't 0** (`CUSTOMER_OWES`). `false` shows them again. Customers are never deleted. |
 
-The business's `defaultCreditLimitMinor` (settings) is copied in as the customer's credit limit; the balance starts at 0. Neither is ever sent by the phone.
+The balance and `oldestUnpaidAt` are never sent by the phone.
 
-- **Result (`saved`):** `{ "customerId": "7c1d…", "version": 1 }`.
-- **Rejected:** `INVALID_PAYLOAD`, `VALIDATION_FAILED`, `ID_TAKEN`.
+- **Result (`saved`):** `{ "customerId": "7c1d…", "version": 2, "warnings": [] }`.
+- **Warning** (the customer **is saved**): **`CUSTOMER_PHONE_DUPLICATE`** with `customerId`, when another customer already has this phone number (AC3: "Ama Mensah already has this number" with **Open her** / **Save anyway**; family members share phones).
+- **Rejected:** `FORBIDDEN`, `INVALID_PAYLOAD`, `VALIDATION_FAILED`, `NOT_FOUND` (editing a customer that isn't in this business), `ID_TAKEN`, `CUSTOMER_OWES`.
 
 #### `sale.create`
 
@@ -1136,6 +1259,72 @@ One confirmed sale (AC18–AC19): its lines, payments and the customer if any. S
 - **Result (`saved`):** `{ "saleId": "2f6a…", "receiptNumber": "K7M-0042", "subtotalMinor": 25763, "paidMinor": 25000, "creditMinor": 763, "flags": { … } }`; `flags` only those this person may see.
 - **Rejected:** `INVALID_PAYLOAD`, `VALIDATION_FAILED` (`fields`: `items.N.priceNote`, `items.N.quantityUnits`, `customerId`, `payments.N.method`), `NOT_FOUND` (product, size, customer or shop not in this business), `SALE_TOTALS_MISMATCH`, `PRICE_VERSION_MISMATCH`, `UNKNOWN_PRICE_VERSION`, `RECEIPT_NUMBER_TAKEN`, `RECEIPT_NUMBER_INVALID`, `PAYMENT_METHOD_UNKNOWN`, `ID_TAKEN`. Each is permanent: "Needs attention".
 
+#### `repayment.create`
+
+A customer pays off some or all of what they owe (AC11–AC14), or a **reversal** of a wrong repayment (AC16). Both have a receipt number from the phone's counter. A permanent record.
+
+- **Who:** every role records repayments (F-17). **Reversals: owner and manager** (associates: `FORBIDDEN`). **Since:** BE9.
+- **A repayment:**
+
+  ```json
+  { "repaymentId": "5a1b…", "receiptNumber": "K7M-0043", "customerId": "7c1d…", "amountMinor": 5000, "method": "mobile_money", "note": "MoMo ref 8812", "recordedAt": "2026-11-20T09:30:00.000Z" }
+  ```
+
+- **A reversal** (cancels the original **in full**; the server copies its amount, customer and method; then record the right amount as a new repayment):
+
+  ```json
+  { "repaymentId": "6c2d…", "receiptNumber": "K7M-0044", "customerId": "7c1d…", "correctsRepaymentId": "5a1b…", "correctionReason": "Typed 500 instead of 50", "recordedAt": "2026-11-20T10:00:00.000Z" }
+  ```
+
+| Field | Rules |
+|---|---|
+| `repaymentId` | UUID made on the phone. |
+| `receiptNumber` | From this phone's counter, as for sales (`RECEIPT_NUMBER_INVALID`, `RECEIPT_NUMBER_TAKEN`). A reversal gets its own number; its receipt says **"Reversal of K7M-0043"** (the original's `receiptNumber`, also in the result as `reversesReceiptNumber`). |
+| `customerId` | The customer. For a reversal: the original's customer (otherwise `NOT_FOUND`). |
+| `amountMinor` | Repayment only: integer ≥ 1. The phone stops more than it shows owed (AC13, "Ama only owes GH₵ 120.00"); the server never refuses more (see `overpaid`). |
+| `method` | Repayment only: a payment-method code (`cash`, `mobile_money`). Unknown code: `PAYMENT_METHOD_UNKNOWN`; a real method the business has switched off: saved and flagged `methodDisabled`. |
+| `note` | Repayment only, optional, 1–200 characters (for example a MoMo reference). |
+| `correctsRepaymentId`, `correctionReason` | Reversal only: the repayment to cancel, and why (1–200 characters). Once only (`ALREADY_REVERSED`); a reversal can't be reversed (`CANNOT_REVERSE_A_REVERSAL`). |
+| `recordedAt` | When it was confirmed (phone clock, UTC ISO 8601). |
+
+- **Never refused for being more than owed** (Decision 4-5, AC24): two phones may each take money offline. The extra becomes **credit** (the balance goes below zero: "Shop owes Ama GH₵ 20.00"), the next credit sale uses it first (AC25), and the repayment is flagged `overpaid` for the owner and manager.
+- **Result (`saved`):** `{ "repaymentId": "5a1b…", "receiptNumber": "K7M-0043", "balanceMinor": 7000, "flags": { … } }` (`balanceMinor`: the customer's balance after it, as the server knows it now; a reversal also has `reversesReceiptNumber`). `flags`: only those this person may see.
+- **Rejected:** `FORBIDDEN`, `INVALID_PAYLOAD`, `NOT_FOUND`, `RECEIPT_NUMBER_INVALID`, `RECEIPT_NUMBER_TAKEN`, `PAYMENT_METHOD_UNKNOWN`, `ALREADY_REVERSED`, `CANNOT_REVERSE_A_REVERSAL`, `ID_TAKEN`.
+
+#### `debtWriteOff.create`
+
+The owner writes off a debt that will never be paid (all or part, AC22), or reverses a wrong write-off in full (AC23b). No receipt. A permanent record; it counts as a loss in the owner's figures.
+
+- **Who:** **owner only**, for both (others: `FORBIDDEN`, AC23). **Since:** BE9.
+- **Payload:** `{ "writeOffId": "…", "customerId": "7c1d…", "amountMinor": 5000, "reason": "moved", "note": null, "recordedAt": "…" }`, or a reversal `{ "writeOffId": "…", "customerId": "7c1d…", "correctsDebtWriteOffId": "…", "correctionReason": "Wrong amount", "recordedAt": "…" }`.
+
+| Field | Rules |
+|---|---|
+| `amountMinor` | Integer ≥ 1. The phone offers at most the balance. |
+| `reason` | `moved`, `died`, `disputed`, `other` (see Enums); **`other` needs a `note`** ("Write what happened."). |
+| `note` | Optional, 1–200 characters. |
+| `correctsDebtWriteOffId`, `correctionReason` | Reversal only, as for repayments (once only; never of a reversal). Example: GH₵ 500.00 written off instead of GH₵ 50.00: reverse it (she owes the GH₵ 500.00 again), then write off GH₵ 50.00. |
+
+- **Result (`saved`):** `{ "writeOffId": "…", "balanceMinor": 55000 }`.
+- **Rejected:** `FORBIDDEN`, `INVALID_PAYLOAD`, `VALIDATION_FAILED` (`fields.note`), `NOT_FOUND`, `ALREADY_REVERSED`, `CANNOT_REVERSE_A_REVERSAL`, `ID_TAKEN`.
+
+#### `openingDebt.create`
+
+A **debt brought forward** from the notebook (AC27–AC30, Decision 4-8): what a customer already owed before the shop used the app, with the date it started. Counted in the balance, Who owes, the debt's age and reminders; **never** in a day's sales or profit. Or a reversal of a wrong one (AC29).
+
+- **Who:** owner and manager (associates: `FORBIDDEN`, AC30). **Since:** BE9.
+- **Payload:** `{ "openingDebtId": "…", "customerId": "7c1d…", "amountMinor": 30000, "owedSince": "2026-10-11", "note": "From the notebook", "recordedAt": "…" }`, or a reversal `{ "openingDebtId": "…", "customerId": "7c1d…", "correctsOpeningDebtId": "…", "correctionReason": "Typed twice", "recordedAt": "…" }`.
+
+| Field | Rules |
+|---|---|
+| `amountMinor` | Integer ≥ 1. |
+| `owedSince` | The business date the debt started (`YYYY-MM-DD`, the business's time zone); may be in the past, **not in the future** (`fields.owedSince`: "The date can't be in the future."). The debt counts from the **start of that day** in the business's time zone. |
+| `note` | Optional, 1–200 characters. |
+| `correctsOpeningDebtId`, `correctionReason` | Reversal only, as for repayments. |
+
+- **Result (`saved`):** `{ "openingDebtId": "…", "balanceMinor": 30000 }`.
+- **Rejected:** `FORBIDDEN`, `INVALID_PAYLOAD`, `VALIDATION_FAILED` (`fields.owedSince`), `NOT_FOUND`, `ALREADY_REVERSED`, `CANNOT_REVERSE_A_REVERSAL`, `ID_TAKEN`.
+
 ---
 
 ## The sale rule (server and phone)
@@ -1176,6 +1365,14 @@ The phone works out every number on the confirmation screen with **this exact ru
 }
 ```
 <!-- sale-rule-fixtures:end -->
+
+---
+
+## How a customer's balance is worked out
+
+The **server** works out every balance; the phone never sends one. In short: everything the customer owes (debts brought forward, the credit part of sales) minus everything paid off (repayments, write-offs; from BE10 returns). The oldest debt is paid first, so `oldestUnpaidAt` is the start of the oldest debt not yet fully paid (Decision 4-7: "owed since"). Money paid beyond what's owed is **credit** (the balance below zero), used first by the next credit sale. A reversed record and its reversal both drop out. The same records give the same balance **whatever order they reach the server in**.
+
+On the phone (AC7, AC19): show the **server's** `balanceMinor` from the `customer` row, plus this phone's own **unsent** sales and repayments on top, labelled "Updating…" until they're sent. Never work out a balance from pulled records: associates don't receive everyone's records, and the server's rules (oldest first, credit) decide the exact figure.
 
 ---
 
@@ -1310,6 +1507,9 @@ Every row type a pull can return. `data` holds only the fields listed; the serve
 | `stockCount` | ✅ all fields | ✅ all fields | ✅ **only** `id`, `locationId`, `productId`, `sizeId`, `countedUnits`, `recordedAt`, `receivedAt` |
 | `customer` | ✅ | ✅ | ✅ (balance and limit, to sell and collect) |
 | `sale` | ✅ all, with `unitCostMinor` and every flag | ✅ all, **no cost**, no `belowCost` | ✅ **their own sales only**, no cost, only `belowZeroOnArrival` and `clockSkew` |
+| `repayment` | ✅ all, with reversals | ✅ all, with reversals | ✅ **their own only, no reversals**; flags: only `clockSkew` |
+| `debtWriteOff` | ✅ | ✅ | ✗ (sees the balance only) |
+| `openingDebt` | ✅ | ✅ | ✗ (sees the balance only) |
 
 Managers and associates learn their own role and business from `GET /api/auth/me`; the phone's copy of a role is for display only (the server checks it on every request).
 
@@ -1375,7 +1575,7 @@ Managers and associates learn their own role and business from `GET /api/auth/me
 
 Prices are kept per version on the server (`PriceVersion`); that history is **never pulled**.
 
-The `product` row also has (since BE7) `lowStockLevelUnits` (units, or `null` = the business's level) and `lowStockWarnings` (boolean).
+The `product` row also has (since BE7) `lowStockLevelUnits` (units, or `null` = the business's level) and `lowStockWarnings` (boolean), and (since BE6.5) `photoId` (UUID or `null`: the product's photo, see Product photos; it may not be downloadable yet).
 
 **`stockMovement`** (everyone; associates get only the stock-rule fields, see the table):
 
@@ -1413,7 +1613,7 @@ The owner's and managers' `stockMovement` rows also have `saleId` (since BE8): t
 }
 ```
 
-`balanceMinor` (what the customer owes; below zero = in credit, from BE9) and `oldestUnpaidAt` are **worked out by the server**; the row comes again whenever they change. Show "Updating…" next to a balance while the phone has unsent sales for that customer (AC19). `creditLimitMinor` `null` = no limit. **Associates** use the balance and limit to warn and stop over-limit credit (AC16) but get no "Who owes" list (Decision 4-6).
+`balanceMinor` (what the customer owes; **below zero = in credit**, the shop owes them) and `oldestUnpaidAt` are **worked out by the server** (see "How a customer's balance is worked out"); the row comes again whenever they change. Show "Updating…" next to a balance while the phone has unsent sales for that customer (AC19). `creditLimitMinor` `null` = no limit. **Associates** use the balance and limit to warn and stop over-limit credit (AC16) but get no "Who owes" list (Decision 4-6).
 
 **`sale`** (owner and managers: all; an associate: **only their own**; lines and payments inside):
 
@@ -1437,6 +1637,23 @@ The owner's and managers' `stockMovement` rows also have `saleId` (since BE8): t
 - `flags`: only the flags this person may see (Enums, "sale flag"); a flag the person may not see is **left out**, not `false`.
 - A sale never changes, so its row never comes twice except when re-pulled from 0.
 
+**`repayment`** (owner and managers: all; an associate: their own, never a reversal):
+
+```json
+{
+  "id": "5a1b…", "customerId": "7c1d…", "deviceId": "3f1c…", "receiptNumber": "K7M-0043", "amountMinor": 5000, "method": "mobile_money",
+  "note": "MoMo ref 8812", "correctsRepaymentId": null, "correctionReason": null,
+  "flags": { "overpaid": false, "methodDisabled": false, "clockSkew": false },
+  "recordedBy": "407f…", "recordedAt": "…", "receivedAt": "…"
+}
+```
+
+A reversal has `correctsRepaymentId` and `correctionReason`; show the original with "Corrected" and the reason under it. `flags` only those this person may see.
+
+**`debtWriteOff`** (owner and managers): `{ "id", "customerId", "amountMinor", "reason", "note", "correctsDebtWriteOffId", "correctionReason", "recordedBy", "recordedAt", "receivedAt" }`. A reversal copies the original's reason and note.
+
+**`openingDebt`** (owner and managers): `{ "id", "customerId", "amountMinor", "owedSince": "2026-10-11", "note", "correctsOpeningDebtId", "correctionReason", "recordedBy", "recordedAt", "receivedAt" }`.
+
 ## Enums and flags
 
 | Enum | Values | Words to show |
@@ -1455,4 +1672,8 @@ The owner's and managers' `stockMovement` rows also have `saleId` (since BE8): t
 | movement flag | `belowZeroOnArrival`, `clockSkew` | "Stock was below zero when this arrived", "The phone's clock looked wrong" |
 | count check (worked out) | `countCheck` | "Check this count: a sale near the count time arrived late" |
 | `priceType` | `retail`, `wholesale` | Retail, Wholesale |
+| write-off `reason` | `moved`, `died`, `disputed`, `other` | Moved away, Died, Disputed, Other |
+| repayment flag (who sees it) | `overpaid` (owner, manager), `methodDisabled` (owner, manager), `clockSkew` (everyone who sees it) | "More than was owed: the customer is in credit", "Paid with a method that was switched off", "The phone's clock looked wrong" |
+| customer warning | `CUSTOMER_PHONE_DUPLICATE` | "[name] already has this number" |
+| history entry `type` | `sale`, `repayment`, `repayment_reversal`, `write_off`, `write_off_reversal`, `opening_debt`, `opening_debt_reversal` | Sale, Repayment, Repayment corrected, Debt written off, Write-off reversed, Owed before Shop Book, Debt brought forward corrected |
 | sale flag (who sees it) | `belowZeroOnArrival` (everyone who sees the sale), `clockSkew` (same), `overCreditLimit` (owner, manager), `afterDayClose` (owner, manager; always `false` until BE11), `belowCost` (**owner only**), `olderPrice` (owner, manager), `roundedLine` (owner, manager), `methodDisabled` (owner, manager) | "Stock was below zero when this arrived", "The phone's clock looked wrong", "Over credit limit", "Arrived after the day was closed", "Sold below cost", "Older price used", "A half-yard price was rounded", "Paid with a method that was switched off" |

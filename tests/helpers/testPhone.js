@@ -34,7 +34,8 @@ async function sign(privateKey, text) {
 
 // The four signing headers for one request.
 async function signingHeaders({ key, deviceId, businessId, method, pathWithQuery, bodyText, signedAt, nonce }) {
-  const bodyHash = createHash('sha256').update(Buffer.from(bodyText ?? '', 'utf8')).digest('hex');
+  const bytes = Buffer.isBuffer(bodyText) ? bodyText : Buffer.from(bodyText ?? '', 'utf8'); // a Buffer: raw bytes (photos)
+  const bodyHash = createHash('sha256').update(bytes).digest('hex');
   const usedNonce = nonce ?? randomBytes(16).toString('base64url');
   const text = [method.toUpperCase(), pathWithQuery, bodyHash, deviceId, businessId, String(signedAt), usedNonce].join('\n');
   return {
@@ -82,7 +83,9 @@ function testPhone(agent, { password, now = Date.now, name = 'Test phone' } = {}
 
     async function run() {
       const businessId = headers['X-Business'];
-      const bodyText = body === undefined ? '' : JSON.stringify(body);
+      // A Buffer is sent as it is (a photo, with the Content-Type the test set); anything else as JSON.
+      const raw = Buffer.isBuffer(body);
+      const bodyText = body === undefined ? '' : raw ? body : JSON.stringify(body);
       let signed = {};
       const device = businessId ? await registerIn(businessId) : null;
       if (device) {
@@ -94,7 +97,8 @@ function testPhone(agent, { password, now = Date.now, name = 'Test phone' } = {}
         if (extra.tamper) signed = extra.tamper(signed);
       }
       let req = agent[method.toLowerCase()](url).set({ ...XHR, ...headers, ...signed });
-      if (bodyText) req = req.set('Content-Type', 'application/json').send(extra.bodyOverride ?? bodyText);
+      if (raw) req = req.set('Content-Type', headers['Content-Type'] ?? 'application/octet-stream').send(extra.bodyOverride ?? bodyText);
+      else if (bodyText) req = req.set('Content-Type', 'application/json').send(extra.bodyOverride ?? bodyText);
       return req;
     }
     return builder;
@@ -105,6 +109,7 @@ function testPhone(agent, { password, now = Date.now, name = 'Test phone' } = {}
     get: (url) => request('GET', url),
     post: (url) => request('POST', url),
     patch: (url) => request('PATCH', url),
+    put: (url) => request('PUT', url),
     delete: (url) => request('DELETE', url),
     registerIn,
     device: (businessId) => devices.get(businessId),

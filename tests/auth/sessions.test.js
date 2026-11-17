@@ -80,8 +80,8 @@ describe('terms', () => {
     expect(res.status).toBe(200);
     expect(res.body.version).toBe('1');
     for (const language of ['en', 'tw']) {
-      expect(res.body.documents[language].privacy).toMatch(/Shop Book privacy notice/);
-      expect(res.body.documents[language].terms).toMatch(/Shop Book terms of use/);
+      expect(res.body.documents[language].privacy).toMatch(/^# Tabova privacy notice$/m);
+      expect(res.body.documents[language].terms).toMatch(/^# Tabova terms of use$/m);
     }
   });
 

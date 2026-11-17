@@ -28,6 +28,10 @@ const production = {
   EMAIL_API_KEY: 'key',
   EMAIL_FROM_ADDRESS: 'shop@shopbook.test',
   EMAIL_FROM_NAME: 'Shop Book',
+  R2_ACCOUNT_ID: '0123456789abcdef0123456789abcdef',
+  R2_ACCESS_KEY_ID: 'r2-key-for-test',
+  R2_SECRET_ACCESS_KEY: 'r2-secret-for-test',
+  R2_BUCKET: 'tabova-photos-test',
 };
 
 describe('parseEnv', () => {
@@ -90,6 +94,35 @@ describe('parseEnv', () => {
     for (const name of ['APP_URL', 'EMAIL_API_KEY', 'EMAIL_FROM_ADDRESS', 'EMAIL_FROM_NAME']) {
       expect(() => parseEnv({ ...production, [name]: undefined })).toThrow(new RegExp(`${name} is required in production`));
     }
+  });
+
+  // BE6.5: photos are kept in R2 in production, and the server won't start
+  // without all four R2 values (so a missing one is found at deploy, not on
+  // the first upload). The secret's value is never printed.
+  test('photo storage: r2 in production with all four R2 values; disk in development, memory in tests', () => {
+    expect(parseEnv(production).PHOTO_STORAGE).toBe('r2');
+    for (const name of ['R2_ACCOUNT_ID', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'R2_BUCKET']) {
+      expect(() => parseEnv({ ...production, [name]: undefined })).toThrow(new RegExp(`${name} is required in production`));
+    }
+    expect(() => parseEnv({ ...production, PHOTO_STORAGE: 'disk' })).toThrow(/PHOTO_STORAGE must be r2 in production/);
+    try {
+      parseEnv({ ...production, R2_ACCOUNT_ID: 'not-an-id' });
+    } catch (err) {
+      expect(err.message).toMatch(/R2_ACCOUNT_ID has an invalid value/);
+      expect(err.message).not.toContain('r2-secret-for-test');
+    }
+    expect(parseEnv({ ...valid, NODE_ENV: 'development' }).PHOTO_STORAGE).toBe('disk');
+    expect(parseEnv({ ...valid, NODE_ENV: 'test' }).PHOTO_STORAGE).toBe('memory');
+    expect(() => parseEnv({ ...valid, NODE_ENV: 'development', PHOTO_STORAGE: 'r2' })).toThrow(/R2_BUCKET is required when PHOTO_STORAGE=r2/);
+  });
+
+  // Only the migration tools pass skipPhotoStorage; it skips the R2 rules and nothing else.
+  test('skipPhotoStorage (migration tools only) skips the R2 rules and nothing else', () => {
+    const withoutR2 = Object.fromEntries(Object.entries(production).filter(([key]) => !key.startsWith('R2_')));
+    expect(() => parseEnv(withoutR2)).toThrow(/R2_ACCOUNT_ID is required in production/);
+    expect(parseEnv(withoutR2, { skipPhotoStorage: true }).NODE_ENV).toBe('production');
+    expect(() => parseEnv({ ...withoutR2, JWT_SECRET: 'p'.repeat(31) }, { skipPhotoStorage: true })).toThrow(/JWT_SECRET must be at least 32 characters/);
+    expect(() => parseEnv({ ...withoutR2, EMAIL_API_KEY: undefined }, { skipPhotoStorage: true })).toThrow(/EMAIL_API_KEY is required in production/);
   });
 
   test('APP_URL defaults to CLIENT_URL outside production', () => {

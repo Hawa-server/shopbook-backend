@@ -1,5 +1,5 @@
-// What each role may see of a sale (BE8), used by the pull and by
-// sale.create's own result, so the rules live in ONE place:
+// What each role may see of a sale (BE8) and of a repayment's flags (BE9),
+// used by the pull and by the operations' own results, so the rules live in ONE place:
 // - `unitCostMinor` and the `belowCost` flag: owner only (cost is the
 //   owner's; "Sold below cost" would reveal it).
 // - `olderPrice`, `overCreditLimit`, `afterDayClose`, `roundedLine`,
@@ -14,6 +14,7 @@ const FLAG_ROLES = {
   afterDayClose: ['owner', 'manager'],
   roundedLine: ['owner', 'manager'],
   methodDisabled: ['owner', 'manager'],
+  overpaid: ['owner', 'manager'], // repayments (BE9)
   belowZeroOnArrival: ['owner', 'manager', 'associate'],
   clockSkew: ['owner', 'manager', 'associate'],
 };

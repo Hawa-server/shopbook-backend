@@ -44,7 +44,7 @@ describe('response headers', () => {
     const { app } = testApp({
       config: testConfig({
         NODE_ENV: 'production', DB_SSL_CA_PATH: ca, TRUST_PROXY: '1', JWT_SECRET: 'h'.repeat(32),
-        APP_URL: 'https://app.shopbook.test', EMAIL_API_KEY: 'key', EMAIL_FROM_ADDRESS: 'shop@shopbook.test', EMAIL_FROM_NAME: 'Shop Book',
+        APP_URL: 'https://app.shopbook.test', EMAIL_API_KEY: 'key', EMAIL_FROM_ADDRESS: 'shop@shopbook.test', EMAIL_FROM_NAME: 'Shop Book', R2_ACCOUNT_ID: '0123456789abcdef0123456789abcdef', R2_ACCESS_KEY_ID: 'k', R2_SECRET_ACCESS_KEY: 's', R2_BUCKET: 'tabova-photos-test',
       }),
     });
     const res = await request(app).get('/api/health');
